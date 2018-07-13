@@ -1,0 +1,12 @@
+
+\.idea/
+
+*.pyc
+
+\*/__init__\.py
+
+*.pth
+
+*.png
+
+__init__\.py
