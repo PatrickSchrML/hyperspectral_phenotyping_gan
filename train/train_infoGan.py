@@ -12,38 +12,53 @@ sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
 from models.discriminator import InfoGAN_Discriminator as Discriminator
 from models.generator import InfoGAN_Generator as Generator
-from config.config import *
+from config.config import config_dict as config
+import time
+import pickle
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--semisup', action="store_true", help='True: semi-supervised | False: unsupervised')
 parser.add_argument('--sup_ratio', default=1.0, required=False, help='ratio of semi-supervised labels')
 parser.add_argument('--pretrained', help='use pretrained model for initialization', action="store_true")
+parser.add_argument('--pretrained_epoch', default=0, help='epoch of pretrained model')
 parser.set_defaults(pretrained=False)
 parser.set_defaults(semisup=False)
 opt = parser.parse_args()
 
 sup_ratio = float(opt.sup_ratio)  # 0.1
 
-print(OUTF)
 try:
-    os.makedirs(OUTF)
+    os.makedirs(config["OUTF"])
 except OSError:
     pass
 
-OUTF_samples = OUTF + "/samples" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
-OUTF_model = OUTF + "/model" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+OUTF_samples = config["OUTF"] + "/samples" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+OUTF_model = config["OUTF"] + "/model" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
 
-NETG = NETG.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
-NETD = NETD.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+config["NETG"] = config["NETG"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.pretrained_epoch)
+config["NETD"] = config["NETD"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.pretrained_epoch)
 
 try:
     os.makedirs(OUTF_samples)
 except OSError:
     pass
+    #raise ValueError("OUT-dir already exists")
 try:
     os.makedirs(OUTF_model)
 except OSError:
     pass
+    #raise ValueError("OUT-dir already exists")
+
+
+def save_config(path_config, data):
+    pickle.dump(data, open(path_config, "wb"))
+    print("Saved config to:", path_config)
+
+
+def load_config(path_config):
+    print("Using pretrained model")
+    print("Loading config from:", path_config)
+    return pickle.load(open(path_config, "rb"))
 
 
 def weights_init(m):
@@ -85,20 +100,26 @@ def gen_discrete_code(n_instance, n_discrete, num_category=10):
 def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, info_reg_conti,
                   n_conti, n_discrete, mean, std, num_category, dataloader,
                   n_epoch, batch_size, noise_dim,
-                  n_update_dis=1, n_update_gen=1, use_gpu=False,
-                  print_every=50):
+                  n_update_dis=1, n_update_gen=1, use_gpu=False):
     """train InfoGAN and print out the losses for D and G"""
 
     # define number of batches
     num_batches = dataloader.size_train // batch_size
+
+    # setup training from earlier checkpoint
     start = 0
-    scheduler_milestones = [15000]
+    scheduler_milestones = [15000]  # reduce learning rate after 15000 steps
+
+    print("GAN balanced train size:", dataloader.size_train)
+    print("-"*42)
+    print("Starting training")
+    print("-"*42)
 
     indices_disc_fake = torch.LongTensor(range(batch_size, batch_size * 2))
     if opt.pretrained:
-        start = EPOCH_PRETRAINED + 1
-        scheduler_milestones = [15000 - EPOCH_PRETRAINED]
-        if EPOCH_PRETRAINED >= 15000:
+        start = opt.pretrained_epoch + 1
+        scheduler_milestones = [15000 - opt.pretrained_epoch]
+        if opt.pretrained_epoch >= 15000:
             gen_lr = 1e-4
             scheduler_milestones = []
 
@@ -113,22 +134,28 @@ def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, i
                              betas=(0.5, 0.999))
 
     # D_optimizer_scheduler = torch.optim.lr_scheduler.MultiStepLR(D_optimizer, [15000], gamma=10., last_epoch=0)
-    G_optimizer_scheduler = torch.optim.lr_scheduler.MultiStepLR(G_optimizer, scheduler_milestones,
-                                                                 gamma=0.1, last_epoch=-1)
+    #G_optimizer_scheduler = torch.optim.lr_scheduler.MultiStepLR(G_optimizer, scheduler_milestones,
+    #                                                             gamma=0.1, last_epoch=-1)
 
     for epoch in range(start, n_epoch):
         # D_optimizer_scheduler.step()
-        G_optimizer_scheduler.step()
+        #G_optimizer_scheduler.step()
 
         D_running_loss = 0.0
         G_running_loss = 0.0
 
         for i in range(num_batches):
             # get next batch
-            true_inputs, true_labels, real_sup_indices = dataloader.fetch_batch(onehot=True, num_classes=NC)
+            start_time1 = time.process_time()
+            true_inputs, true_labels, real_sup_indices = dataloader.fetch_batch(onehot=True, num_classes=num_category)
+            end_time1 = time.process_time()
+            if epoch == 0 and i == 0:
+                print("Data loading time 1/{} steps per epoch:".format(num_batches),
+                      (end_time1 - start_time1) * 1000, "ms")
+
+            start_time2 = time.process_time()
+
             # get the inputs from true distribution
-            true_inputs = Variable(true_inputs)
-            true_labels = Variable(true_labels)
             if use_gpu:
                 true_inputs = true_inputs.cuda()
                 true_labels = true_labels.cuda()
@@ -146,13 +173,13 @@ def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, i
                 conti_codes = conti_codes.cuda()
                 discr_codes = discr_codes.cuda()
 
-            # generate fake images
+            # generate fake signatures
             gen_inputs = torch.cat((noises, conti_codes, discr_codes), 1)
             fake_inputs = InfoGAN_Gen(gen_inputs)
 
             inputs = torch.cat([true_inputs, fake_inputs])
 
-            # make a minibatch of labels
+            # make a minibatch of labels for fake/real discrimination
             labels = np.zeros(2 * batch_size)
             labels[:batch_size] = 1
             labels = torch.from_numpy(labels.astype(np.float32))
@@ -222,7 +249,9 @@ def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, i
 
                 G_loss.backward()
                 G_optimizer.step()
-
+            end_time2 = time.process_time()
+            if epoch == 0 and i == 0:
+                print("Learning time:", (end_time2 - start_time2) * 1000, "ms")
             # print statistics
             D_running_loss += D_loss.data.item()  # [0]
             G_running_loss += G_loss.data.item()  # [0]
@@ -232,11 +261,13 @@ def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, i
                    G_running_loss / num_batches))
             # D_running_loss = 0.0
             # G_running_loss = 0.0
-
         # checkpointing
         if (epoch + 1) % 100 == 0 or epoch == n_epoch - 1:
             dataloader.save_image(fake_inputs.detach()[:],
                                   '%s/fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
+        if (epoch + 1) <= 1000 and (epoch + 1) % 100 == 0:
+            dataloader.save_model(InfoGAN_Gen.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+            dataloader.save_model(InfoGAN_Dis.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
         if (epoch + 1) % 1000 == 0 or epoch == n_epoch - 1:
             dataloader.save_model(InfoGAN_Gen.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
             dataloader.save_model(InfoGAN_Dis.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
@@ -255,16 +286,16 @@ def run_InfoGAN(info_reg_discrete=1., info_reg_conti=0.5, noise_dim=10,
     # initialize models
     InfoGAN_Dis = Discriminator(n_conti, n_discrete, num_category,
                                 D_featmap_dim,
-                                NDF, NGF)
+                                config["NDF"], config["NGF"])
     InfoGAN_Dis.apply(weights_init)
-    if opt.pretrained and NETD != '':
-        InfoGAN_Dis.load_state_dict(torch.load(NETD))
+    if opt.pretrained and config["NETD"] != '':
+        InfoGAN_Dis.load_state_dict(torch.load(config["NETD"]))
 
     InfoGAN_Gen = Generator(noise_dim, n_conti, n_discrete, num_category,
-                            NGF)
+                            config["NGF"])
     InfoGAN_Gen.apply(weights_init)
-    if opt.pretrained and NETG != '':
-        InfoGAN_Gen.load_state_dict(torch.load(NETG))
+    if opt.pretrained and config["NETG"] != '':
+        InfoGAN_Gen.load_state_dict(torch.load(config["NETG"]))
 
     if use_gpu:
         InfoGAN_Dis = InfoGAN_Dis.cuda()
@@ -277,11 +308,16 @@ def run_InfoGAN(info_reg_discrete=1., info_reg_conti=0.5, noise_dim=10,
 
 
 if __name__ == '__main__':
+    if opt.pretrained:
+        config = load_config(os.path.join(OUTF_model, "config.p"))
+    else:
+        save_config(os.path.join(OUTF_model, "config.p"), config)
+
     run_InfoGAN(info_reg_discrete=1., info_reg_conti=0.5,
-                num_category=NC,
-                noise_dim=NOISE, n_conti=N_CONTI, n_discrete=N_DISCRETE,
-                mean=CONTI_MEAN, std=CONTI_STD,
+                num_category=config["NC"],
+                noise_dim=config["NOISE"], n_conti=config["N_CONTI"], n_discrete=config["N_DISCRETE"],
+                mean=config["CONTI_MEAN"], std=config["CONTI_STD"],
                 n_update_dis=1, n_update_gen=1,
                 use_gpu=True,
-                dis_lr=1e-4, gen_lr=1e-3,
-                n_epoch=50000, batch_size=128)
+                dis_lr=1e-4, gen_lr=1e-4,
+                n_epoch=50000, batch_size=256)
