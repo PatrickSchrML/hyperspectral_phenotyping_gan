@@ -259,9 +259,9 @@ class DataLoader:
 
     def fetch_samples(self, num_sample_each_class=1):
         # data, targets, _ = zip(*self.data_original)
-        data, targets, _ = zip(*self.data_train)
+        data, targets = zip(*self.data_train)
         data = np.array(data)
-        targets = np.array(targets)
+        targets = np.array(targets).squeeze()
 
         shuffled_indices = np.array(range(0, len(data)))
         np.random.shuffle(shuffled_indices)
@@ -281,13 +281,6 @@ class DataLoader:
                 x = np.append(x, tmp_x, axis=0)
                 y = np.append(y, tmp_y, axis=0)
 
-        # class0_x, class0_y = data[targets == 0][:num_sample_each_class], targets[targets == 0][:num_sample_each_class]
-        # class1_x, class1_y = data[targets == 1][:num_sample_each_class], targets[targets == 1][:num_sample_each_class]
-        # class2_x, class2_y = data[targets == 2][:num_sample_each_class], targets[targets == 2][:num_sample_each_class]
-
-        # batch_x = np.array([class0_x, class1_x, class2_x]).reshape([num_sample_each_class*self.num_classes, 160])
-        # batch_y = np.array([class0_y, class1_y, class2_y]).reshape([num_sample_each_class*self.num_classes])
-
         batch_x = np.array(x).reshape([num_sample_each_class * self.num_classes, 160])
         batch_y = np.array(y).reshape([num_sample_each_class * self.num_classes])
 
@@ -298,10 +291,9 @@ class DataLoader:
 
     def fetch_samples_mean(self):
         # data, targets, _ = zip(*self.data_original)
-        data, targets, _ = zip(*self.data_train)
+        data, targets = zip(*self.data_train)
         data = np.array(data)
-        targets = np.array(targets)
-
+        targets = np.array(targets).squeeze()
         x = None
         y = None
         for i_class in range(self.num_classes):
@@ -313,14 +305,6 @@ class DataLoader:
             else:
                 x = np.append(x, tmp_x, axis=0)
                 y = np.append(y, tmp_y, axis=0)
-
-        # class0_x, class0_y = data[targets == 0], targets[targets == 0][0]
-        # class1_x, class1_y = data[targets == 1], targets[targets == 1][0]
-        # class2_x, class2_y = data[targets == 2], targets[targets == 2][0]
-
-        # class0_x_mean = np.mean(class0_x, axis=0)
-        # class1_x_mean = np.mean(class1_x, axis=0)
-        # class2_x_mean = np.mean(class2_x, axis=0)
 
         batch_x = np.array(x).reshape([self.num_classes, 160])
         batch_y = np.array(y).reshape([self.num_classes])

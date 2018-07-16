@@ -3,27 +3,17 @@ CONTI_MEAN = 0.
 CONTI_STD = 1.
 N_CONTI = 2
 N_DISCRETE = 1
-NOISE = 100  # 10
-NC = 4  # 5  # num classes
+NOISE = 10  # 10
+NC = 3  # 5  # num classes
 NDF = 160  # dim output signal
 NGF = int(NDF / 4)
 CUDA = True
 NGPU = 1
 
-NETG_completion = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan/model/netG_epoch_39999.pth"
-NETD_completion = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan/model/netD_epoch_39999.pth"
-
-NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan_{}{}/model{}/netG_epoch_{}{}.pth".format(
-    NC, "-crossval", "{}", "{}", "-crossval-0")  # 3 cluster
-NETD_classify = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan_{}{}/model/netD_epoch_40000{}.pth".format(
-    NC, "-crossval", "-crossval-0")
-
-NETG = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan_{}{}/model{}/netG_epoch_{}{}.pth".format(
-    NC, "-crossval", "{}", "{}", "-crossval-0")  # "./model"
-NETD = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan_{}{}/model{}/netD_epoch_{}{}.pth".format(
-    NC, "-crossval", "{}", "{}", "-crossval-0")  # "./model"
-OUTF = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/generated_leaf_infogan_{}{}".format(NC,
-                                                                                                                    "-crossval")
+model_path = "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(NC, N_DISCRETE, N_CONTI, NOISE)
+NETG = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
+NETD = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netD_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
+OUTF = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}".format(model_path)
 MANUALSEED = None
 
 config_dict = dict()
@@ -39,13 +29,7 @@ config_dict["NGF"] = NGF
 config_dict["CUDA"] = CUDA
 config_dict["NGPU"] = NGPU
 
-config_dict["NETG_completion"] = NETG_completion
-config_dict["NETD_completion"] = NETD_completion
-
-config_dict["NETG_generate"] = NETG_generate
-config_dict["NETD_classify"] = NETD_classify
-
-config_dict["NETG"] = NETD_classify
+config_dict["NETG"] = NETG
 config_dict["NETD"] = NETD
 config_dict["OUTF"] = OUTF
 config_dict["MANUALSEED"] = None

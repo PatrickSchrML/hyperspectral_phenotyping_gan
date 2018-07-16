@@ -8,23 +8,31 @@ import matplotlib.pyplot as plt
 import torch
 from torch.autograd import Variable
 import sys
+import pickle
+import os
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
 from models.generator import InfoGAN_Generator as Generator
-from config.config import *
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--nc', default=3, required=False,  help='dim of category code or number of classes')
+parser.add_argument('--n_conti', default=2, required=False,  help='')
+parser.add_argument('--n_dis', default=1, required=False,  help='')
+parser.add_argument('--n_noise', default=10, required=False,  help='')
+
 parser.add_argument('--epoch', required=True, help='epoch...')
 parser.add_argument('--semisup', action="store_true", help='True: semi-supervised | False: unsupervised')
 parser.add_argument('--sup_ratio', default=1.0, required=False, help='ratio of semi-supervised labels')
-parser.set_defaults(dataset="leaf")
 parser.set_defaults(semisup=False)
 
 opt = parser.parse_args()
 sup_ratio = float(opt.sup_ratio)
 
 
-NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio*100)) if opt.semisup else "", opt.epoch)
+def load_config(path_config):
+    print("Using pretrained model")
+    print("Loading config from:", path_config)
+    return pickle.load(open(path_config, "rb"))
 
 
 def activate_dropout(m):
@@ -128,6 +136,9 @@ def run_InfoGAN(InfoGAN_Gen,
 def plot_fake(fakes, num_category, label, mean, x_real):
     # PLOT FAKE DATA
     current_plot = label * 2 + 1
+    print("---")
+    print(label)
+    print(current_plot)
     ax = plt.subplot(num_category, 2, current_plot)
     ax.set_title("Label {} Fake".format(label))
     ax.grid(True)
@@ -165,12 +176,19 @@ def plot_fake(fakes, num_category, label, mean, x_real):
             # plt.legend([l1], ["fake sample" + str(label[idx])])
 
 
-def run_InfoGAN_conditioned_label(noise_dim=10,
-                                  n_conti=2, n_discrete=1, mean=0.0, std=1., num_category=3,
+def run_InfoGAN_conditioned_label(config, noise_dim=10, n_conti=2, n_discrete=1,
+                                  mean=0.0, std=1., num_category=3,
                                   batch_size=50, use_gpu=False):
+    model_path = "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(opt.nc,
+                                                                                                opt.n_dis,
+                                                                                                opt.n_conti,
+                                                                                                opt.n_noise)
+    NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(
+        model_path, "{}", "{}", "-crossval-0")
+    NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.epoch)
     # loading data
     InfoGAN_Gen = Generator(noise_dim, n_conti, n_discrete, num_category,
-                            NGF)
+                            config["NGF"])
 
     InfoGAN_Gen.load_state_dict(torch.load(NETG_generate))
     InfoGAN_Gen.eval()
@@ -188,22 +206,28 @@ def run_InfoGAN_conditioned_label(noise_dim=10,
     plt.figure(figsize=(32, 16))
     for category in range(num_category):
         fakes = run_InfoGAN(InfoGAN_Gen, n_conti, n_discrete, mean, std, num_category, batch_size, noise_dim, use_gpu,
-                              label=category)
+                            label=category)
 
-        #category = 1 if category == 0 else 0 if category == 1 else 2
-        #category = 1 if category == 2 else 2 if category == 0 else 0
-        #category = 1 if category == 2 else 2 if category == 0 else 0
-        #category = 0 if category == 2 else 2 if category == 0 else 1
+        # category = 1 if category == 0 else 0 if category == 1 else 2
+        # category = 1 if category == 2 else 2 if category == 0 else 0
+        category = 1 if category == 2 else 2 if category == 0 else 0 if category == 1 else category
+        # category = 0 if category == 2 else 2 if category == 0 else 1
         mean_of_category = None if category > 2 else batch_x_mean[category]
         x_real_of_category = None if category > 2 else batch_x_real[batch_y_real == category]
         plot_fake(fakes, num_category, category, mean_of_category, x_real_of_category)
 
 
-
 if __name__ == '__main__':
     # test conditional label
-    print(NC)
-    run_InfoGAN_conditioned_label(noise_dim=NOISE, n_conti=N_CONTI, n_discrete=N_DISCRETE, num_category=NC,
-                                  mean=CONTI_MEAN, std=CONTI_STD,
-                                  use_gpu=True, batch_size=80 * NC)
+    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/"
+    config_path += "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(opt.nc,
+                                                                                                opt.n_dis,
+                                                                                                opt.n_conti,
+                                                                                                opt.n_noise)
+    config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+    config = load_config(os.path.join(config_path, "config.p"))
+    run_InfoGAN_conditioned_label(config, noise_dim=config["NOISE"], n_conti=config["N_CONTI"],
+                                  n_discrete=config["N_DISCRETE"], num_category=config["NC"],
+                                  mean=config["CONTI_MEAN"], std=config["CONTI_STD"],
+                                  use_gpu=True, batch_size=80 * config["NC"])
     plt.show()

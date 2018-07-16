@@ -8,29 +8,31 @@ import matplotlib.pyplot as plt
 import torch
 from torch.autograd import Variable
 import sys
-sys.path.append('/home/patrick/repositories/hyperspec')
-from used_methods.hsgan.data_loader import DataLoader
-from used_methods.hsgan.generator import InfoGAN_Generator as Generator
-#from used_methods.hsgan.config.multilabel.config_leaf_infogan_multilabel import *
-#from used_methods.hsgan.config.multilabel.config_leaf_infogan_multilabel_2onehotshots import *
-#from used_methods.hsgan.config.multilabel.config_leaf_infogan_multilabel_conti import *
-from used_methods.hsgan.config.config_leaf_infogan_unsup_semisup import *
-
+import pickle
+import os
+sys.path.append('/home/patrick/repositories/hyperspectral_phenotyping_gan')
+from models.generator import InfoGAN_Generator as Generator
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', help='leaf | in')
+parser.add_argument('--nc', default=3, required=False,  help='dim of category code or number of classes')
+parser.add_argument('--n_conti', default=2, required=False,  help='')
+parser.add_argument('--n_dis', default=1, required=False,  help='')
+parser.add_argument('--n_noise', default=10, required=False,  help='')
 parser.add_argument('--epoch', required=True, help='epoch...')
 parser.add_argument('--semisup', action="store_true", help='True: semi-supervised | False: unsupervised')
 parser.add_argument('--sup_ratio', default=1.0, required=False, help='ratio of semi-supervised labels')
-parser.set_defaults(dataset="leaf")
 parser.set_defaults(semisup=False)
 
 opt = parser.parse_args()
 sup_ratio = float(opt.sup_ratio)
 
-NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio*100)) if opt.semisup else "", opt.epoch)
 
-print(NETG_generate)
+def load_config(path_config):
+    print("Using pretrained model")
+    print("Loading config from:", path_config)
+    return pickle.load(open(path_config, "rb"))
+
+
 def activate_dropout(m):
     classname = m.__class__.__name__
     # if classname.find('Dropout') != -1:
@@ -143,15 +145,22 @@ def plot_fake(fakes, num_rows, num_cols, current_plot):
         # plt.legend([l1], ["fake sample" + str(label[idx])])
 
 
-def run_InfoGAN_conditioned_label(noise_dim=10, n_conti=2, n_discrete=1, num_category=3, use_gpu=False):
+def run_InfoGAN_conditioned_label(config, noise_dim=10, n_conti=2, n_discrete=1, num_category=3, use_gpu=False):
     # loading data
-    from_dataset = False if FROM_DATASET is None else FROM_DATASET
     InfoGAN_Gen = Generator(noise_dim, n_conti, n_discrete, num_category,
-                            NGF)
+                            config["NGF"])
+
+    model_path = "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(opt.nc,
+                                                                                              opt.n_dis,
+                                                                                              opt.n_conti,
+                                                                                              opt.n_noise)
+    NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(
+        model_path, "{}", "{}", "-crossval-0")
+
+    NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.epoch)
 
     InfoGAN_Gen.load_state_dict(torch.load(NETG_generate))
     InfoGAN_Gen.eval()
-    InfoGAN_Gen.apply(activate_dropout)
 
     if use_gpu:
         InfoGAN_Gen = InfoGAN_Gen.cuda()
@@ -174,9 +183,9 @@ def run_InfoGAN_conditioned_label(noise_dim=10, n_conti=2, n_discrete=1, num_cat
 
         for interpolated_idx, interpolated_value in enumerate(interpolated_code):
             # change 1 code param
-            #conti_codes[:, 0] = -interpolated_value
-            #conti_codes[:, 1] = interpolated_value
-            conti_codes[:, 2] = interpolated_value
+            #conti_codes[:, 0] = interpolated_value
+            conti_codes[:, 1] = interpolated_value
+            #conti_codes[:, 2] = interpolated_value
             conti_codes = Variable(torch.Tensor(conti_codes))
             #conti_codes = Variable(gen_conti_codes(1, n_conti,
             #                                       0, 1))
@@ -192,7 +201,15 @@ def run_InfoGAN_conditioned_label(noise_dim=10, n_conti=2, n_discrete=1, num_cat
 
 if __name__ == '__main__':
     # test conditional label
-    print(NC)
-    run_InfoGAN_conditioned_label(noise_dim=NOISE, n_conti=N_CONTI, n_discrete=N_DISCRETE, num_category=NC,
+    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/"
+    config_path += "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(opt.nc,
+                                                                                                opt.n_dis,
+                                                                                                opt.n_conti,
+                                                                                                opt.n_noise)
+    config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+    config = load_config(os.path.join(config_path, "config.p"))
+
+    run_InfoGAN_conditioned_label(config, noise_dim=config["NOISE"], n_conti=config["N_CONTI"],
+                                  n_discrete=config["N_DISCRETE"], num_category=config["NC"],
                                   use_gpu=True)
     plt.show()
