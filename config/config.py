@@ -1,7 +1,7 @@
 BATCHSIZE = 32
 CONTI_MEAN = 0.
 CONTI_STD = 1.
-N_CONTI = 2
+N_CONTI = 3
 N_DISCRETE = 1
 NOISE = 10  # 10
 NC = 3  # 5  # num classes

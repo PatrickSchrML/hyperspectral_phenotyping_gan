@@ -5,13 +5,14 @@ import numpy as np
 import os
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import sys
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
-from models.discriminator import InfoGAN_Discriminator as Discriminator
-from models.generator import InfoGAN_Generator as Generator
+from models.networks import FrontEnd, D, Q, weights_init
+from models.networks import G_with_fc as G
 from config.config import config_dict as config
 import time
 import pickle
@@ -27,16 +28,20 @@ opt = parser.parse_args()
 
 sup_ratio = float(opt.sup_ratio)  # 0.1
 
-try:
-    os.makedirs(config["OUTF"])
-except OSError:
-    pass
+created_outf = [False, 0, config["OUTF"]]
+
+while not created_outf[0]:
+    try:
+        os.makedirs(created_outf[2])
+        created_outf[0] = True
+    except OSError:
+        created_outf[1] += 1
+        created_outf[2] = config["OUTF"] + "_" + str(created_outf[1])
+        pass
+config["OUTF"] = created_outf[2]
 
 OUTF_samples = config["OUTF"] + "/samples" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
 OUTF_model = config["OUTF"] + "/model" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
-
-config["NETG"] = config["NETG"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.pretrained_epoch)
-config["NETD"] = config["NETD"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.pretrained_epoch)
 
 try:
     os.makedirs(OUTF_samples)
@@ -61,263 +66,202 @@ def load_config(path_config):
     return pickle.load(open(path_config, "rb"))
 
 
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        m.weight.data.normal_(0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        m.weight.data.normal_(1.0, 0.02)
-        m.bias.data.fill_(0)
+class log_gaussian:
+    def __call__(self, x, mu, var):
+        logli = -0.5 * (var.mul(2 * np.pi) + 1e-6).log() - \
+                (x - mu).pow(2).div(var.mul(2.0) + 1e-6)
+
+        return logli.sum(1).mean().mul(-1)
 
 
-def gen_noise(n_instance, n_dim=2):
-    """generate n-dim uniform random noise"""
-    return torch.Tensor(np.random.uniform(low=-1.0, high=1.0,
-                                          size=(n_instance, n_dim)))
+class Trainer:
+    def __init__(self, G, FE, D, Q, config):
+
+        self.G = G
+        self.FE = FE
+        self.D = D
+        self.Q = Q
+
+        self.dim_noise = config["NOISE"]
+        self.dim_code_conti = config["N_CONTI"]
+        self.num_categories = config["NC"]
+        self.size_total = self.dim_noise + self.dim_code_conti + self.num_categories
+
+        self.batch_size = 40 * self.num_categories
+        self.dataloader = DataLoader(batch_size=self.batch_size, sup_ratio=sup_ratio)
+
+    def _noise_sample(self, dis_c, con_c, noise, bs):
+
+        idx = np.random.randint(self.num_categories, size=bs)
+        c = np.zeros((bs, self.num_categories))
+        c[range(bs), idx] = 1.0
+
+        dis_c.data.copy_(torch.Tensor(c))
+        con_c.data.uniform_(-1.0, 1.0)
+        noise.data.uniform_(-1.0, 1.0)
+
+        z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+
+        return z, idx
+
+    def train(self):
+
+        real_x = torch.FloatTensor(self.batch_size, 160).cuda()  # TODO
+        label = torch.FloatTensor(self.batch_size).cuda()
+        dis_c = torch.FloatTensor(self.batch_size, self.num_categories).cuda()
+        con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
+        noise = torch.FloatTensor(self.batch_size, self.dim_noise).cuda()
+
+        real_x = Variable(real_x)
+        label = Variable(label, requires_grad=False)
+        dis_c = Variable(dis_c)
+        con_c = Variable(con_c)
+        noise = Variable(noise)
+
+        criterionD = nn.BCELoss().cuda()
+        criterionQ_dis = nn.CrossEntropyLoss().cuda()
+        criterionQ_con = log_gaussian()
+
+        optimD = optim.Adam([{'params': self.FE.parameters()},
+                             {'params': self.D.parameters()}],
+                            lr=0.0001,  # 0.0002
+                            betas=(0.5, 0.99))
+        optimG = optim.Adam([{'params': self.G.parameters()},
+                             {'params': self.FE.parameters()},
+                             {'params': self.Q.parameters()}],
+                            lr=0.0001,  # 0.001
+                            betas=(0.5, 0.99))
 
 
-def gen_conti_codes(n_instance, n_conti, mean=0, std=1):
-    """generate gaussian continuous codes with specified mean and std"""
-    if n_conti == 0:
-        return torch.Tensor([])
-    codes = np.random.randn(n_instance, n_conti) * std + mean
-    return torch.Tensor(codes)
+        # fixed random variables
+        batch_size_eval = self.batch_size
+        c = np.linspace(-1, 1, batch_size_eval // self.num_categories).reshape(1, -1)
+        c = np.repeat(c, self.num_categories, 0).reshape(-1, 1)
 
+        c1 = np.hstack([c, np.zeros_like(c)])
+        c2 = np.hstack([np.zeros_like(c), c])
+        c3 = np.hstack([np.zeros_like(c), c])
+        c_all = np.hstack([c, c])
 
-def gen_discrete_code(n_instance, n_discrete, num_category=10):
-    """generate discrete codes with n categories"""
-    codes = []
-    for i in range(n_discrete):
-        code = np.zeros((n_instance, num_category))
-        random_cate = np.random.randint(0, num_category, n_instance)
-        code[range(n_instance), random_cate] = 1
-        codes.append(code)
+        if self.dim_code_conti > 3:
+            raise ValueError("Continuous code of dim > 3 not implemented")
+        if self.dim_code_conti == 3:
+            c1 = np.hstack([c1, np.zeros_like(c)])
+            c2 = np.hstack([np.zeros_like(c), c2])
+            c3 = np.hstack([c3, np.zeros_like(c)])
+            c_all = np.hstack([c_all, c])
 
-    codes = np.concatenate(codes, 1)
-    return torch.Tensor(codes)
+        idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
+        one_hot = np.zeros((batch_size_eval, self.num_categories))
+        one_hot[range(batch_size_eval), idx] = 1
+        fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
 
+        num_batches = self.dataloader.size_train // self.batch_size
 
-def train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, info_reg_conti,
-                  n_conti, n_discrete, mean, std, num_category, dataloader,
-                  n_epoch, batch_size, noise_dim,
-                  n_update_dis=1, n_update_gen=1, use_gpu=False):
-    """train InfoGAN and print out the losses for D and G"""
+        n_epoch = 10000
+        for epoch in range(n_epoch):
+            for num_iters in range(num_batches):
 
-    # define number of batches
-    num_batches = dataloader.size_train // batch_size
+                x, _, _ = self.dataloader.fetch_batch(onehot=True, num_classes=config["NC"])
+                # real part
+                optimD.zero_grad()
 
-    # setup training from earlier checkpoint
-    start = 0
-    scheduler_milestones = [15000]  # reduce learning rate after 15000 steps
+                bs = x.size(0)
+                real_x.data.resize_(x.size())
+                label.data.resize_(bs, 1)
+                dis_c.data.resize_(bs, self.num_categories)
+                con_c.data.resize_(bs, self.dim_code_conti)
+                noise.data.resize_(bs, self.dim_noise)
+                real_x.data.copy_(x)
+                fe_out1 = self.FE(real_x)
+                probs_real = self.D(fe_out1)
+                label.data.fill_(1)
+                loss_real = criterionD(probs_real, label)
+                loss_real.backward()
 
-    print("GAN balanced train size:", dataloader.size_train)
-    print("-"*42)
-    print("Starting training")
-    print("-"*42)
+                # fake part
+                z, idx = self._noise_sample(dis_c, con_c, noise, bs)
+                fake_x = self.G(z)
+                fe_out2 = self.FE(fake_x.detach())
+                probs_fake = self.D(fe_out2)
+                label.data.fill_(0)
+                loss_fake = criterionD(probs_fake, label)
+                loss_fake.backward()
 
-    indices_disc_fake = torch.LongTensor(range(batch_size, batch_size * 2))
-    if opt.pretrained:
-        start = opt.pretrained_epoch + 1
-        scheduler_milestones = [15000 - opt.pretrained_epoch]
-        if opt.pretrained_epoch >= 15000:
-            gen_lr = 1e-4
-            scheduler_milestones = []
+                D_loss = loss_real + loss_fake
 
-    #
-    # assign loss function and optimizer (Adam) to D and G
-    D_criterion = torch.nn.BCELoss()
-    D_optimizer = optim.Adam(InfoGAN_Dis.parameters(), lr=dis_lr,
-                             betas=(0.5, 0.999))
+                optimD.step()
 
-    G_criterion = torch.nn.BCELoss()
-    G_optimizer = optim.Adam(InfoGAN_Gen.parameters(), lr=gen_lr,
-                             betas=(0.5, 0.999))
+                # G and Q part
+                optimG.zero_grad()
 
-    # D_optimizer_scheduler = torch.optim.lr_scheduler.MultiStepLR(D_optimizer, [15000], gamma=10., last_epoch=0)
-    #G_optimizer_scheduler = torch.optim.lr_scheduler.MultiStepLR(G_optimizer, scheduler_milestones,
-    #                                                             gamma=0.1, last_epoch=-1)
+                fe_out = self.FE(fake_x)
+                probs_fake = self.D(fe_out)
+                label.data.fill_(1.0)
 
-    for epoch in range(start, n_epoch):
-        # D_optimizer_scheduler.step()
-        #G_optimizer_scheduler.step()
+                reconstruct_loss = criterionD(probs_fake, label)
 
-        D_running_loss = 0.0
-        G_running_loss = 0.0
+                q_logits, q_mu, q_var = self.Q(fe_out)
+                class_ = torch.LongTensor(idx).cuda()
+                target = Variable(class_)
+                dis_loss = criterionQ_dis(q_logits, target)
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * 0.5  # 0.1
 
-        for i in range(num_batches):
-            # get next batch
-            start_time1 = time.process_time()
-            true_inputs, true_labels, real_sup_indices = dataloader.fetch_batch(onehot=True, num_classes=num_category)
-            end_time1 = time.process_time()
-            if epoch == 0 and i == 0:
-                print("Data loading time 1/{} steps per epoch:".format(num_batches),
-                      (end_time1 - start_time1) * 1000, "ms")
-
-            start_time2 = time.process_time()
-
-            # get the inputs from true distribution
-            if use_gpu:
-                true_inputs = true_inputs.cuda()
-                true_labels = true_labels.cuda()
-                real_sup_indices = real_sup_indices.cuda()
-                indices_disc_fake = indices_disc_fake.cuda()
-
-            # get inputs (noises and codes) for Generator
-            noises = Variable(gen_noise(batch_size, n_dim=noise_dim))
-            conti_codes = Variable(gen_conti_codes(batch_size, n_conti,
-                                                   mean, std))
-            discr_codes = Variable(gen_discrete_code(batch_size, n_discrete,
-                                                     num_category))
-            if use_gpu:
-                noises = noises.cuda()
-                conti_codes = conti_codes.cuda()
-                discr_codes = discr_codes.cuda()
-
-            # generate fake signatures
-            gen_inputs = torch.cat((noises, conti_codes, discr_codes), 1)
-            fake_inputs = InfoGAN_Gen(gen_inputs)
-
-            inputs = torch.cat([true_inputs, fake_inputs])
-
-            # make a minibatch of labels for fake/real discrimination
-            labels = np.zeros(2 * batch_size)
-            labels[:batch_size] = 1
-            labels = torch.from_numpy(labels.astype(np.float32))
-            if use_gpu:
-                labels = labels.cuda()
-            labels = Variable(labels)
-
-            # Discriminator
-            D_optimizer.zero_grad()
-            outputs = InfoGAN_Dis(inputs)
-
-            # add supervision
-            if opt.semisup:
-                discr_codes_for_reg_discrete = torch.cat((true_labels[real_sup_indices], discr_codes))
-                output_shift_indices_discrete = torch.cat((real_sup_indices, indices_disc_fake))
-            else:
-                discr_codes_for_reg_discrete = discr_codes
-                output_shift_indices_discrete = torch.range(start=batch_size, end=batch_size * 2 - 1).long()
-
-            # calculate mutual information lower bound L(G, Q)
-            #
-            # of discrete code
-            for j in range(n_discrete):
-                shift = (j * num_category)
-                start = 1 + n_conti + shift
-                end = start + num_category
-
-                Q_cx_discr = outputs[output_shift_indices_discrete, start:end]
-                codes = discr_codes_for_reg_discrete[:, shift:(shift + num_category)]
-
-                condi_entro = -torch.mean(torch.sum(Q_cx_discr * codes, 1))
-
-                if j == 0:
-                    L_discrete = -condi_entro
-                else:
-                    L_discrete -= condi_entro
-            L_discrete /= n_discrete
-
-            # of continuous code
-            Q_cx_conti = outputs[batch_size:, 1:(1 + n_conti)]
-            L_conti = torch.mean(-(((Q_cx_conti - mean) / std) ** 2))
-
-            # Update Discriminator
-
-            D_loss = D_criterion(outputs[:, 0], labels)
-            if n_discrete > 0:
-                D_loss = D_loss - info_reg_discrete * L_discrete
-
-            if n_conti > 0:
-                D_loss = D_loss - info_reg_conti * L_conti
-
-            if n_update_dis > 0 and i % n_update_dis == 0:
-                D_loss.backward(retain_graph=True)
-                D_optimizer.step()
-
-            # Update Generator
-            if n_update_gen > 0 and i % n_update_gen == 0:
-                G_optimizer.zero_grad()
-                G_loss = G_criterion(outputs[batch_size:, 0],
-                                     labels[:batch_size])
-
-                if n_discrete > 0:
-                    G_loss = G_loss - info_reg_discrete * L_discrete
-
-                if n_conti > 0:
-                    G_loss = G_loss - info_reg_conti * L_conti
-
+                G_loss = reconstruct_loss + dis_loss + con_loss
                 G_loss.backward()
-                G_optimizer.step()
-            end_time2 = time.process_time()
-            if epoch == 0 and i == 0:
-                print("Learning time:", (end_time2 - start_time2) * 1000, "ms")
-            # print statistics
-            D_running_loss += D_loss.data.item()  # [0]
-            G_running_loss += G_loss.data.item()  # [0]
-        if (epoch + 1) % 10 == 0:  # print_every == (print_every - 1) or i == num_batches -1:
-            print('[%d] D loss: %.3f ; G loss: %.3f' %
-                  (epoch + 1, D_running_loss / num_batches,
-                   G_running_loss / num_batches))
-            # D_running_loss = 0.0
-            # G_running_loss = 0.0
-        # checkpointing
-        if (epoch + 1) % 100 == 0 or epoch == n_epoch - 1:
-            dataloader.save_image(fake_inputs.detach()[:],
-                                  '%s/fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
-        if (epoch + 1) <= 1000 and (epoch + 1) % 100 == 0:
-            dataloader.save_model(InfoGAN_Gen.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-            dataloader.save_model(InfoGAN_Dis.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-        if (epoch + 1) % 1000 == 0 or epoch == n_epoch - 1:
-            dataloader.save_model(InfoGAN_Gen.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-            dataloader.save_model(InfoGAN_Dis.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                optimG.step()
 
-    print('Finished Training')
+                if num_iters == num_batches - 1 and (epoch + 1) % 10 == 0:
+                    print('Epoch/Iter:{0}/{1}, Dloss: {2}, Gloss: {3}'.format(
+                        epoch + 1, num_iters, D_loss.data.cpu().numpy(),
+                        G_loss.data.cpu().numpy())
+                    )
 
+                    noise.data.copy_(fix_noise)
+                    dis_c.data.copy_(torch.Tensor(one_hot))
 
-def run_InfoGAN(info_reg_discrete=1., info_reg_conti=0.5, noise_dim=10,
-                n_conti=2, n_discrete=1, mean=0.0, std=0.5, num_category=3,
-                n_epoch=2, batch_size=50, use_gpu=False, dis_lr=1e-4,
-                gen_lr=1e-3, n_update_dis=1, n_update_gen=1):
-    # loading data
-    dataloader = DataLoader(batch_size=batch_size, sup_ratio=sup_ratio)
+                    con_c.data.copy_(torch.from_numpy(c_all))
+                    z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+                    x_save = self.G(z)
+                    self.dataloader.save_image(x_save.data,
+                                          '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
 
-    D_featmap_dim = 1024
-    # initialize models
-    InfoGAN_Dis = Discriminator(n_conti, n_discrete, num_category,
-                                D_featmap_dim,
-                                config["NDF"], config["NGF"])
-    InfoGAN_Dis.apply(weights_init)
-    if opt.pretrained and config["NETD"] != '':
-        InfoGAN_Dis.load_state_dict(torch.load(config["NETD"]))
+                    #con_c.data.copy_(torch.from_numpy(c2))
+                    #z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+                    #x_save = self.G(z)
+                    #self.dataloader.save_image(x_save.data,
+                    #                      '%s/c_2fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
 
-    InfoGAN_Gen = Generator(noise_dim, n_conti, n_discrete, num_category,
-                            config["NGF"])
-    InfoGAN_Gen.apply(weights_init)
-    if opt.pretrained and config["NETG"] != '':
-        InfoGAN_Gen.load_state_dict(torch.load(config["NETG"]))
+            if (epoch + 1) < 5000 and (epoch + 1) % 100 == 0:
+                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
 
-    if use_gpu:
-        InfoGAN_Dis = InfoGAN_Dis.cuda()
-        InfoGAN_Gen = InfoGAN_Gen.cuda()
-
-    train_InfoGAN(InfoGAN_Dis, InfoGAN_Gen, dis_lr, gen_lr, info_reg_discrete, info_reg_conti,
-                  n_conti, n_discrete, mean, std, num_category, dataloader,
-                  n_epoch, batch_size, noise_dim,
-                  n_update_dis, n_update_gen, use_gpu)
-
+            if (epoch + 1) >= 5000 and (epoch + 1) % 1000 == 0 or epoch == n_epoch - 1:
+                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
 
 if __name__ == '__main__':
-    if opt.pretrained:
-        config = load_config(os.path.join(OUTF_model, "config.p"))
-    else:
-        save_config(os.path.join(OUTF_model, "config.p"), config)
 
-    run_InfoGAN(info_reg_discrete=1., info_reg_conti=0.5,
-                num_category=config["NC"],
-                noise_dim=config["NOISE"], n_conti=config["N_CONTI"], n_discrete=config["N_DISCRETE"],
-                mean=config["CONTI_MEAN"], std=config["CONTI_STD"],
-                n_update_dis=1, n_update_gen=1,
-                use_gpu=True,
-                dis_lr=1e-4, gen_lr=1e-4,
-                n_epoch=50000, batch_size=256)
+    save_config(os.path.join(OUTF_model, "config.p"), config)
+
+    config["NETG"] = config["NETG"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "",
+                                           opt.pretrained_epoch)
+    config["NETD"] = config["NETD"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "",
+                                           opt.pretrained_epoch)
+
+    size_total = config["NOISE"] + config["N_CONTI"] + config["NC"]
+    fe = FrontEnd()
+    d = D()
+    q = Q(dim_conti=config["N_CONTI"], dim_disc=config["NC"])
+    g = G(size_total)
+
+    for i in [fe, d, q, g]:
+        i.cuda()
+        i.apply(weights_init)
+
+    trainer = Trainer(g, fe, d, q, config)
+    trainer.train()
