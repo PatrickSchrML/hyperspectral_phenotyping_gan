@@ -148,7 +148,7 @@ class DataLoader:
         batch_x = self.x_train[first_index:first_index + self.batch_size]
         batch_y = self.y_train[first_index:first_index + self.batch_size]
         batch_sup_indices = np.array(range(len(batch_y)))[
-            self.y_sup_mask[first_index:first_index + self.batch_size] is True]
+            self.y_sup_mask[first_index:first_index + self.batch_size] == True]
 
         batch_x = torch.FloatTensor(batch_x)
 
@@ -180,7 +180,7 @@ class DataLoader:
         batch_x = self.x_train[first_index:first_index + self.batch_size]
         batch_y = self.y_train[first_index:first_index + self.batch_size]
         batch_sup_indices = np.array(range(len(batch_y)))[
-            self.y_sup_mask[first_index:first_index + self.batch_size] is True]
+            self.y_sup_mask[first_index:first_index + self.batch_size] == True]
 
         # split into 2 one-hot encodings
         batch_y_0 = batch_y.copy()  # batch_y == 0 or batch_y == 2, gesund blatt und gesund stamm
@@ -221,7 +221,7 @@ class DataLoader:
         batch_x = self.x_train[first_index:first_index + self.batch_size]
         batch_y = self.y_train[first_index:first_index + self.batch_size]
         batch_sup_indices = np.array(range(len(batch_y)))[
-            self.y_sup_mask[first_index:first_index + self.batch_size] is True]
+            self.y_sup_mask[first_index:first_index + self.batch_size] == True]
 
         # split into 2 one-hot encodings
         batch_y_0 = batch_y.copy()  # batch_y == 0 or batch_y == 2, gesund blatt und gesund stamm
