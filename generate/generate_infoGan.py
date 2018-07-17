@@ -27,7 +27,9 @@ parser.add_argument('--outf_suffix', default="", required=False, help='')
 parser.add_argument('--epoch', required=True, help='epoch...')
 parser.add_argument('--semisup', action="store_true", help='True: semi-supervised | False: unsupervised')
 parser.add_argument('--sup_ratio', default=1.0, required=False, help='ratio of semi-supervised labels')
+parser.add_argument('--interpolate', action="store_true", help='')
 parser.set_defaults(semisup=False)
+parser.set_defaults(interpolate=False)
 opt = parser.parse_args()
 
 sup_ratio = float(opt.sup_ratio)  # 0.1
@@ -119,7 +121,7 @@ class Generator:
 
         return z, idx
 
-    def generate(self):
+    def generate(self, interpolate=True):
 
         batch_size_eval = self.batch_size
 
@@ -153,21 +155,26 @@ class Generator:
         if self.dim_code_conti == 3:
             c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
             c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
-            c12 = np.hstack([c, -c, np.zeros_like(c)])
+            c12 = np.hstack([c, c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
             c13 = np.hstack([c, np.zeros_like(c), c])
             c23 = np.hstack([np.zeros_like(c), c, c])
-            c_all = np.hstack([c, c, c])
-        cx = c12
+            c_all = np.hstack([c, -c, c])
+        cx = c3
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
         one_hot[range(batch_size_eval), idx] = 1
-        # fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
-        fix_noise = torch.Tensor(1, self.dim_noise).uniform_(-1, 1).repeat(batch_size_eval, 1)
-        # print(fix_noise)
-        # print(fix_noise.shape)
-        # 1 / 0
+
+        if interpolate:
+            # fixed noise for each sample
+            fix_noise = torch.Tensor(1, self.dim_noise).uniform_(-1, 1).repeat(batch_size_eval, 1)
+        else:
+            # random noise for each sample
+            fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+
+        #fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+
         label.data.resize_(self.batch_size, 1)
         dis_c.data.resize_(self.batch_size, self.num_categories)
         con_c.data.resize_(self.batch_size, self.dim_code_conti)
@@ -176,16 +183,23 @@ class Generator:
         noise.data.copy_(fix_noise)
         dis_c.data.copy_(torch.Tensor(one_hot))
 
-        # con_c.data.copy_(torch.from_numpy(cx))
-        con_c.data.uniform_(-1.0, 1.0)
+        if interpolate:
+            con_c.data.copy_(torch.from_numpy(cx))  # interpolated continuous code
+        else:
+            con_c.data.uniform_(-1.0, 1.0)  # random continuous code
         z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
         x_save = self.G(z)
         x_save = x_save.data.cpu().numpy()
 
         num_samples = np.arange(0, batch_size_eval + 1, batch_size_eval // self.num_categories)
+
+        plt.figure(figsize=(32,16))
         for label in range(self.num_categories):
-            mean_of_category = None if label > 2 else batch_x_mean[label]
-            x_real_of_category = None if label > 2 else batch_x_real[batch_y_real == label]
+            category = label
+            #category = 0 if label == 2 else 2 if label == 0 else 1
+
+            mean_of_category = None if label > 2 else batch_x_mean[category]
+            x_real_of_category = None if label > 2 else batch_x_real[batch_y_real == category]
 
             plot_fake(x_save[num_samples[label]:num_samples[label + 1]],
                       self.num_categories, label,
@@ -202,8 +216,12 @@ if __name__ == '__main__':
                                                                                                    opt.n_noise,
                                                                                                    opt.outf_suffix)
 
+    if opt.semisup:
+        out_path += "_supervised"
+
     config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}".format(out_path)
-    config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+    # config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+    config_path += "/model{}".format("")
     config = load_config(os.path.join(config_path, "config.p"))
 
     size_total = config["NOISE"] + config["N_CONTI"] + config["NC"]
@@ -211,7 +229,8 @@ if __name__ == '__main__':
 
     NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(
         out_path, "{}", "{}", "-crossval-0")
-    NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.epoch)
+    # NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.epoch)
+    NETG_generate = NETG_generate.format("", opt.epoch)
 
     g.load_state_dict(torch.load(NETG_generate))
     g.eval()
@@ -220,4 +239,4 @@ if __name__ == '__main__':
         i.cuda()
 
     generator = Generator(g, config)
-    generator.generate()
+    generator.generate(interpolate=opt.interpolate)

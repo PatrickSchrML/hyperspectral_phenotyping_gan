@@ -158,7 +158,7 @@ class Trainer:
 
         num_batches = self.dataloader.size_train // self.batch_size
 
-        n_epoch = 10000
+        n_epoch = 5000
         for epoch in range(n_epoch):
             for num_iters in range(num_batches):
 
@@ -205,7 +205,7 @@ class Trainer:
                 class_ = torch.LongTensor(idx).cuda()
                 target = Variable(class_)
                 dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * 0.5  # 0.1
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * 0.2  # 0.1
 
                 G_loss = reconstruct_loss + dis_loss + con_loss
                 G_loss.backward()
