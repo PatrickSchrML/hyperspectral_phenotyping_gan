@@ -37,7 +37,8 @@ class DataLoader:
         else:
             n_splits = 2
 
-        data_train, targets_train, data_test, targets_test, meta = self.load_leaf(train_ratio, n_splits, balanced)
+        data_train, targets_train, data_test, targets_test, complete_x, complete_y, \
+        meta = self.load_leaf(train_ratio, n_splits, balanced)
 
         self.x_train = data_train
         self.y_train = targets_train
@@ -54,6 +55,7 @@ class DataLoader:
         self.y_test = targets_test
 
         self.data_train = list(zip(data_train, targets_train))
+        self.data_total = list(zip(complete_x, complete_y))
 
         self.num_classes = np.amax(targets_train).astype(int) + 1
         self.size_train = len(self.x_train)
@@ -79,9 +81,10 @@ class DataLoader:
         # switch train and test data -> so trainset is bigger then testset
         #test_x, test_y = get_data_by_idx(data["test"], meta)
         #train_x, train_y = get_data_by_idx(data["train_balanced" if balanced else "train"], meta)
-
         test_x, test_y = get_data_by_idx(data["train"], meta)
         train_x, train_y = get_data_by_idx(data["test_balanced" if balanced else "test"], meta)
+
+        complete_x, complete_y = get_data_by_idx(np.hstack((data["train"], data["test"])), meta)
 
         max_value = np.maximum(np.max(test_x), np.max(train_x))
 
@@ -89,8 +92,9 @@ class DataLoader:
         train_x = normalize(train_x, max_value=max_value)  # normalize data to be between [0,1]
 
         # return data_origin, data_train, targets_train, data_test, targets_test, meta
-        return train_x, train_y, test_x, test_y, meta
+        return train_x, train_y, test_x, test_y, complete_x, complete_y, meta
 
+    # just used by old implementation - dont remove
     def load_leaf_by_dataset(self, train_frac, n_splits):
 
         path = '/home/patrick/repositories/hyperspec/data_helper/datasets/dataset_train-ratio-{}%_n-splits-{}'.format(

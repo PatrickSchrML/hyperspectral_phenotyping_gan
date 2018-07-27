@@ -57,6 +57,9 @@ class Q(nn.Module):
     def __init__(self, dim_disc=3, dim_conti=2):
         super(Q, self).__init__()
 
+        self.dim_disc = dim_disc
+        self.dim_conti = dim_conti
+
         self.conv = nn.Conv1d(1024, 128, kernel_size=1, bias=False)
         self.bn = nn.BatchNorm1d(128)
         self.lReLU = nn.LeakyReLU(0.1, inplace=True)
@@ -66,7 +69,11 @@ class Q(nn.Module):
 
     def forward(self, x):
         y = self.conv(x)
-        disc_logits = self.conv_disc(y).squeeze()
+
+        if self.dim_disc == 0:
+            disc_logits = None
+        else:
+            disc_logits = self.conv_disc(y).squeeze()
         mu = self.conv_mu(y).squeeze()
         var = self.conv_var(y).squeeze().exp()
 
@@ -101,6 +108,34 @@ def create_generator_1d(n_input, NGF, starting_nbfeatures=128):
     return fc, conv
 
 
+def create_generator_1d_new(n_input, NGF, starting_nbfeatures=128):
+    fc = nn.Sequential(
+        nn.Linear(n_input, 1024),
+        nn.ReLU(inplace=True),
+        nn.Linear(1024, NGF * starting_nbfeatures),
+        nn.BatchNorm1d(NGF * starting_nbfeatures),
+        nn.ReLU(inplace=True),
+    )
+    conv = nn.Sequential(
+        nn.ConvTranspose1d(starting_nbfeatures, starting_nbfeatures,
+                           kernel_size=4, stride=2, padding=1, bias=False),
+        nn.ReLU(inplace=True),
+        nn.BatchNorm1d(starting_nbfeatures),
+        nn.Conv1d(starting_nbfeatures, starting_nbfeatures // 2,
+                  kernel_size=5, stride=1, padding=2, bias=False),
+        nn.BatchNorm1d(starting_nbfeatures // 2),
+        nn.ReLU(inplace=True),
+        nn.ConvTranspose1d(starting_nbfeatures // 2, starting_nbfeatures // 2,
+                           kernel_size=4, stride=2, padding=1, bias=False),
+        nn.BatchNorm1d(starting_nbfeatures // 2),
+        nn.ReLU(inplace=True),
+        nn.ConvTranspose1d(starting_nbfeatures // 2, 1, kernel_size=3, stride=1, padding=1, bias=False),
+        nn.BatchNorm1d(1),
+        nn.Sigmoid(),
+    )
+    return fc, conv
+
+
 class G_with_fc(nn.Module):
     def __init__(self, dim_noise):
         super(G_with_fc, self).__init__()
@@ -108,6 +143,7 @@ class G_with_fc(nn.Module):
         self.starting_nbfeatures = 128
         self.width = 40
 
+        #self.fc, self.conv = create_generator_1d_new(n_input=dim_noise, NGF=self.width,
         self.fc, self.conv = create_generator_1d(n_input=dim_noise, NGF=self.width,
                                                  starting_nbfeatures=self.starting_nbfeatures)
 
@@ -123,23 +159,39 @@ class G_without_fc(nn.Module):
     def __init__(self, dim_noise):
         super(G_without_fc, self).__init__()
 
+        self.starting_nbfeatures = 128
+        self.width = 40
+
         self.main = nn.Sequential(
-            nn.ConvTranspose2d(dim_noise, 1024, 1, 1, bias=False),
-            nn.BatchNorm2d(1024),
+            nn.ConvTranspose1d(1, self.width, kernel_size=4, stride=2, bias=False),
+            nn.BatchNorm1d(self.width),
             nn.ReLU(True),
-            nn.ConvTranspose2d(1024, 128, 7, 1, bias=False),
-            nn.BatchNorm2d(128),
+            nn.ConvTranspose1d(self.width, self.starting_nbfeatures, kernel_size=4, stride=2, bias=False),
+            nn.BatchNorm1d(self.starting_nbfeatures),
             nn.ReLU(True),
-            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.ConvTranspose1d(self.starting_nbfeatures, self.starting_nbfeatures, kernel_size=5, stride=2, bias=False),
+            nn.BatchNorm1d(self.starting_nbfeatures),
             nn.ReLU(True),
-            nn.ConvTranspose2d(64, 1, 4, 2, 1, bias=False),
-            nn.Sigmoid()
+            nn.ConvTranspose1d(self.starting_nbfeatures, self.starting_nbfeatures // 2,
+                               kernel_size=4, stride=2, padding=1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(self.starting_nbfeatures // 2),
+            nn.ConvTranspose1d(self.starting_nbfeatures // 2, self.starting_nbfeatures // 2,
+                               kernel_size=5, stride=2, padding=1, bias=False),
+            nn.BatchNorm1d(self.starting_nbfeatures // 2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose1d(self.starting_nbfeatures // 2, 1, kernel_size=4, stride=1, padding=0, bias=False),
+            nn.BatchNorm1d(1),
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
-        output = self.main(x)
-        return output
+        x = x.view(x.shape[0], 1, x.shape[1])
+        x = self.main(x)
+        print(x.shape)
+        1 / 0
+        x = x.squeeze()
+        return x
 
 
 def weights_init(m):

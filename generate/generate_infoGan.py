@@ -46,30 +46,33 @@ def load_config(path_config):
     return pickle.load(open(path_config, "rb"))
 
 
-def plot_fake(fakes, num_category, label, mean, x_real):
+def plot_fake(fakes, num_category, num_col, label, mean, x_real, legend=None, alpha=0.3, linewidth_fake=2):
     # PLOT FAKE DATA
-    current_plot = label * 2 + 1
-    ax = plt.subplot(num_category, 2, current_plot)
-    ax.set_title("Label {} Fake".format(label))
+    current_plot = label * num_col + 1
+    ax = plt.subplot(num_category, num_col, current_plot)
+    #ax.set_title("Label {} Fake".format(label))
     ax.grid(True)
     linestyle = "r-"
-    if mean is not None and num_category <= 3:
-        _, = plt.plot(mean, linestyle, linewidth=8)
+    # if mean is not None and num_category <= 3:
+    #    _, = plt.plot(mean, linestyle, linewidth=8)
     plt.ylim(0, 1.0)
     # plt.yscale('symlog')
     plt.yticks(np.arange(0, 1.0, .1))
 
     for idx, x in enumerate(fakes):
-        plt.subplot(num_category, 2, current_plot)
+        plt.subplot(num_category, num_col, current_plot)
         x = x.flatten()
         linestyle = "--"
-        _, = plt.plot(x, linestyle, linewidth=2, alpha=0.3)
+        _, = plt.plot(x, linestyle, linewidth=linewidth_fake, alpha=alpha)
+        if legend is not None:
+            legend = legend.squeeze()
+            plt.legend(legend, fontsize=32)
         # plt.legend([l1], ["fake sample" + str(label[idx])])
 
     # PLOT REAL DATA
     if x_real is not None:
         current_plot += 1
-        ax = plt.subplot(num_category, 2, current_plot)
+        ax = plt.subplot(num_category, num_col, current_plot)
         ax.set_title("Label {} Real".format(label))
         ax.grid(True)
         linestyle = "r-"
@@ -79,7 +82,7 @@ def plot_fake(fakes, num_category, label, mean, x_real):
         plt.yticks(np.arange(0, 1.0, .1))
 
         for idx, x in enumerate(x_real):
-            plt.subplot(num_category, 2, current_plot)
+            plt.subplot(num_category, num_col, current_plot)
             x = x.flatten()
             linestyle = "--"
             _, = plt.plot(x, linestyle, linewidth=2, alpha=0.3)
@@ -101,25 +104,28 @@ class Generator:
 
         self.dim_noise = config["NOISE"]
         self.dim_code_conti = config["N_CONTI"]
+        self.dim_code_disc = config["NC"] * config["N_DISCRETE"]
         self.num_categories = config["NC"]
-        self.size_total = self.dim_noise + self.dim_code_conti + self.num_categories
+        self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
 
-        self.batch_size = 30 * self.num_categories
+        if opt.interpolate:
+            self.batch_size = 10 * self.num_categories
+        else:
+            self.batch_size = 100 * self.num_categories
+
         self.dataloader = DataLoader(batch_size=self.batch_size, sup_ratio=sup_ratio)
 
-    def _noise_sample(self, dis_c, con_c, noise, bs):
+    def _set_noise(self, noise, dis_c, con_c):
+        z_ = []  # [noise, dis_c, con_c]
+        if self.dim_noise != 0:
+            z_.append(noise)
+        if self.dim_code_disc != 0:
+            z_.append(dis_c)
+        if self.dim_code_conti != 0:
+            z_.append(con_c)
+        z = torch.cat(z_, 1).view(-1, self.size_total)
 
-        idx = np.random.randint(self.num_categories, size=bs)
-        c = np.zeros((bs, self.num_categories))
-        c[range(bs), idx] = 1.0
-
-        dis_c.data.copy_(torch.Tensor(c))
-        con_c.data.uniform_(-1.0, 1.0)
-        noise.data.uniform_(-1.0, 1.0)
-
-        z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
-
-        return z, idx
+        return z
 
     def generate(self, interpolate=True):
 
@@ -142,7 +148,7 @@ class Generator:
         noise = Variable(noise)
 
         # fixed random variables
-        c = np.linspace(-1, 1, batch_size_eval // self.num_categories).reshape(1, -1)
+        c = np.linspace(-2, 2, batch_size_eval // self.num_categories).reshape(1, -1)
         c = np.repeat(c, self.num_categories, 0).reshape(-1, 1)
 
         c1 = np.hstack([c, np.zeros_like(c)])
@@ -155,12 +161,12 @@ class Generator:
         if self.dim_code_conti == 3:
             c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
             c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
-            c12 = np.hstack([c, c, np.zeros_like(c)])
+            c12 = np.hstack([c, -c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
             c13 = np.hstack([c, np.zeros_like(c), c])
             c23 = np.hstack([np.zeros_like(c), c, c])
-            c_all = np.hstack([c, -c, c])
-        cx = c3
+            c_all = np.hstack([c, c, c])
+        cx = c1
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -173,7 +179,7 @@ class Generator:
             # random noise for each sample
             fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
 
-        #fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+        # fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
 
         label.data.resize_(self.batch_size, 1)
         dis_c.data.resize_(self.batch_size, self.num_categories)
@@ -187,23 +193,105 @@ class Generator:
             con_c.data.copy_(torch.from_numpy(cx))  # interpolated continuous code
         else:
             con_c.data.uniform_(-1.0, 1.0)  # random continuous code
-        z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+        z = self._set_noise(noise, dis_c, con_c)
         x_save = self.G(z)
         x_save = x_save.data.cpu().numpy()
 
         num_samples = np.arange(0, batch_size_eval + 1, batch_size_eval // self.num_categories)
 
-        plt.figure(figsize=(32,16))
+        plt.figure(figsize=(32, 16))
         for label in range(self.num_categories):
             category = label
-            #category = 0 if label == 2 else 2 if label == 0 else 1
+            # category = 0 if label == 2 else 2 if label == 0 else 1
 
             mean_of_category = None if label > 2 else batch_x_mean[category]
             x_real_of_category = None if label > 2 else batch_x_real[batch_y_real == category]
 
             plot_fake(x_save[num_samples[label]:num_samples[label + 1]],
-                      self.num_categories, label,
+                      self.num_categories, 2, label,
                       mean_of_category, x_real_of_category)
+
+        plt.show()
+
+    def generate_without_disc_code(self, interpolate=True):
+
+        self.batch_size = 9
+        batch_size_eval = self.batch_size
+
+        batch_x_mean, _ = self.dataloader.fetch_samples_mean()
+        batch_x_mean = batch_x_mean.numpy()
+        batch_x_real, batch_y_real = self.dataloader.fetch_samples(
+            num_sample_each_class=batch_size_eval * 10 // self.num_categories)
+        batch_x_real, batch_y_real = batch_x_real.numpy(), batch_y_real.numpy()
+
+        label = torch.FloatTensor(self.batch_size).cuda()
+        con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
+        noise = torch.FloatTensor(self.batch_size, self.dim_noise).cuda()
+
+        label = Variable(label, requires_grad=False)
+        con_c = Variable(con_c)
+        noise = Variable(noise)
+
+        # fixed random variables
+        c = np.linspace(-2, 2, batch_size_eval // self.num_categories).reshape(1, -1)
+        c_plot = c.copy()
+        c = np.repeat(c, self.num_categories, 0).reshape(-1, 1)
+
+        c1 = np.hstack([c, np.zeros_like(c)])
+        c2 = np.hstack([np.zeros_like(c), c])
+        c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
+        c4 = c2.copy()
+        c5 = np.hstack([np.zeros_like(c), np.zeros_like(c), np.zeros_like(c), np.zeros_like(c), c])
+        c12 = np.hstack([c, c])
+        c_all = np.hstack([c, c])
+
+        if self.dim_code_conti > 3:
+            for _ in range(self.dim_code_conti - 2):
+                c1 = np.hstack([c1, np.zeros_like(c)])
+                c2 = np.hstack([c2, np.zeros_like(c)])
+                c12 = np.hstack([c12, np.zeros_like(c)])
+        if self.dim_code_conti == 3:
+            c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
+            c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
+            c12 = np.hstack([c, c, np.zeros_like(c)])
+            c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
+            c13 = np.hstack([c, np.zeros_like(c), c])
+            c23 = np.hstack([np.zeros_like(c), c, c])
+            c_all = np.hstack([c, c, c])
+        cx = c_all
+
+        idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
+        one_hot = np.zeros((batch_size_eval, self.num_categories))
+        one_hot[range(batch_size_eval), idx] = 1
+
+        if interpolate:
+            # fixed noise for each sample
+            fix_noise = torch.Tensor(1, self.dim_noise).uniform_(-1, 1).repeat(batch_size_eval, 1)
+        else:
+            # random noise for each sample
+            fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+
+        # fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+
+        label.data.resize_(self.batch_size, 1)
+        con_c.data.resize_(self.batch_size, self.dim_code_conti)
+        noise.data.resize_(self.batch_size, self.dim_noise)
+        fix_noise.resize_(self.batch_size, self.dim_noise)
+        noise.data.copy_(fix_noise)
+
+        if interpolate:
+            con_c.data.copy_(torch.from_numpy(cx))  # interpolated continuous code
+        else:
+            con_c.data.uniform_(-1.0, 1.0)  # random continuous code
+        z = self._set_noise(noise, None, con_c)
+        x_save = self.G(z)
+        x_save = x_save.data.cpu().numpy()
+
+        plt.figure(figsize=(32, 16))
+
+        plot_fake(x_save,
+                  self.num_categories, 1, 0,
+                  None, None, legend=c_plot, alpha=0.8, linewidth_fake=6)
 
         plt.show()
 
@@ -211,10 +299,10 @@ class Generator:
 if __name__ == '__main__':
 
     out_path = "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}{}".format(opt.nc,
-                                                                                                   opt.n_dis,
-                                                                                                   opt.n_conti,
-                                                                                                   opt.n_noise,
-                                                                                                   opt.outf_suffix)
+                                                                                              opt.n_dis,
+                                                                                              opt.n_conti,
+                                                                                              opt.n_noise,
+                                                                                              opt.outf_suffix)
 
     if opt.semisup:
         out_path += "_supervised"
@@ -224,7 +312,7 @@ if __name__ == '__main__':
     config_path += "/model{}".format("")
     config = load_config(os.path.join(config_path, "config.p"))
 
-    size_total = config["NOISE"] + config["N_CONTI"] + config["NC"]
+    size_total = config["NOISE"] + config["N_CONTI"] + (config["NC"] * config["N_DISCRETE"])
     g = G(size_total)
 
     NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(
@@ -239,4 +327,8 @@ if __name__ == '__main__':
         i.cuda()
 
     generator = Generator(g, config)
-    generator.generate(interpolate=opt.interpolate)
+
+    if (config["NC"] * config["N_DISCRETE"]) == 0:
+        generator.generate_without_disc_code(interpolate=opt.interpolate)
+    else:
+        generator.generate(interpolate=opt.interpolate)

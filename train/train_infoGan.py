@@ -18,15 +18,10 @@ import time
 import pickle
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--semisup', action="store_true", help='True: semi-supervised | False: unsupervised')
-parser.add_argument('--sup_ratio', default=1.0, required=False, help='ratio of semi-supervised labels')
 parser.add_argument('--pretrained', help='use pretrained model for initialization', action="store_true")
 parser.add_argument('--pretrained_epoch', default=0, help='epoch of pretrained model')
 parser.set_defaults(pretrained=False)
-parser.set_defaults(semisup=False)
 opt = parser.parse_args()
-
-sup_ratio = float(opt.sup_ratio)  # 0.1
 
 created_outf = [False, 0, config["OUTF"]]
 
@@ -40,8 +35,8 @@ while not created_outf[0]:
         pass
 config["OUTF"] = created_outf[2]
 
-OUTF_samples = config["OUTF"] + "/samples" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
-OUTF_model = config["OUTF"] + "/model" + ("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
+OUTF_samples = config["OUTF"] + "/samples"
+OUTF_model = config["OUTF"] + "/model"
 
 try:
     os.makedirs(OUTF_samples)
@@ -88,7 +83,19 @@ class Trainer:
         self.size_total = self.dim_noise + self.dim_code_conti + self.num_categories
 
         self.batch_size = 40 * self.num_categories
-        self.dataloader = DataLoader(batch_size=self.batch_size, sup_ratio=sup_ratio)
+        self.dataloader = DataLoader(batch_size=self.batch_size)
+
+    def _set_noise(self, noise, dis_c, con_c):
+        z_ = []  # [noise, dis_c, con_c]
+        if self.dim_noise != 0:
+            z_.append(noise)
+        if self.dim_code_disc != 0:
+            z_.append(dis_c)
+        if self.dim_code_conti != 0:
+            z_.append(con_c)
+        z = torch.cat(z_, 1).view(-1, self.size_total)
+
+        return z
 
     def _noise_sample(self, dis_c, con_c, noise, bs):
 
@@ -100,7 +107,7 @@ class Trainer:
         con_c.data.uniform_(-1.0, 1.0)
         noise.data.uniform_(-1.0, 1.0)
 
-        z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+        z = self._set_noise(noise, dis_c, con_c)
 
         return z, idx
 
@@ -139,17 +146,10 @@ class Trainer:
         c = np.repeat(c, self.num_categories, 0).reshape(-1, 1)
 
         c1 = np.hstack([c, np.zeros_like(c)])
-        c2 = np.hstack([np.zeros_like(c), c])
-        c3 = np.hstack([np.zeros_like(c), c])
-        c_all = np.hstack([c, c])
 
-        if self.dim_code_conti > 3:
-            raise ValueError("Continuous code of dim > 3 not implemented")
-        if self.dim_code_conti == 3:
-            c1 = np.hstack([c1, np.zeros_like(c)])
-            c2 = np.hstack([np.zeros_like(c), c2])
-            c3 = np.hstack([c3, np.zeros_like(c)])
-            c_all = np.hstack([c_all, c])
+        if self.dim_code_conti >= 3:
+            for _ in range(self.dim_code_conti - 2):
+                c1 = np.hstack([c1, np.zeros_like(c)])
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -205,13 +205,13 @@ class Trainer:
                 class_ = torch.LongTensor(idx).cuda()
                 target = Variable(class_)
                 dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * 0.2  # 0.1
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * 1.  # 0.1
 
                 G_loss = reconstruct_loss + dis_loss + con_loss
                 G_loss.backward()
                 optimG.step()
 
-                if num_iters == num_batches - 1 and (epoch + 1) % 10 == 0:
+                if num_iters == num_batches - 1 and (epoch + 1) % 100 == 0:
                     print('Epoch/Iter:{0}/{1}, Dloss: {2}, Gloss: {3}'.format(
                         epoch + 1, num_iters, D_loss.data.cpu().numpy(),
                         G_loss.data.cpu().numpy())
@@ -220,17 +220,11 @@ class Trainer:
                     noise.data.copy_(fix_noise)
                     dis_c.data.copy_(torch.Tensor(one_hot))
 
-                    con_c.data.copy_(torch.from_numpy(c_all))
-                    z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
+                    con_c.data.copy_(torch.from_numpy(c1))
+                    z = self._set_noise(noise, dis_c, con_c)
                     x_save = self.G(z)
                     self.dataloader.save_image(x_save.data,
                                           '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
-
-                    #con_c.data.copy_(torch.from_numpy(c2))
-                    #z = torch.cat([noise, dis_c, con_c], 1).view(-1, self.size_total)
-                    #x_save = self.G(z)
-                    #self.dataloader.save_image(x_save.data,
-                    #                      '%s/c_2fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
 
             if (epoch + 1) < 5000 and (epoch + 1) % 100 == 0:
                 self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
@@ -248,10 +242,8 @@ if __name__ == '__main__':
 
     save_config(os.path.join(OUTF_model, "config.p"), config)
 
-    config["NETG"] = config["NETG"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "",
-                                           opt.pretrained_epoch)
-    config["NETD"] = config["NETD"].format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "",
-                                           opt.pretrained_epoch)
+    config["NETG"] = config["NETG"].format("", opt.pretrained_epoch)
+    config["NETD"] = config["NETD"].format("", opt.pretrained_epoch)
 
     size_total = config["NOISE"] + config["N_CONTI"] + config["NC"]
     fe = FrontEnd()
