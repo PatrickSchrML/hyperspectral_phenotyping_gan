@@ -108,6 +108,25 @@ def create_generator_1d(n_input, NGF, starting_nbfeatures=128):
     return fc, conv
 
 
+class G_with_fc(nn.Module):
+    def __init__(self, dim_noise):
+        super(G_with_fc, self).__init__()
+
+        self.starting_nbfeatures = 128
+        self.width = 40
+
+        self.fc, self.conv = create_generator_1d(n_input=dim_noise, NGF=self.width,
+                                                 starting_nbfeatures=self.starting_nbfeatures)
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = x.view(x.shape[0], x.shape[1] / self.width, x.shape[1] / self.starting_nbfeatures)
+        x = self.conv(x)
+        x = x.squeeze()
+        return x
+
+
+"""
 def create_generator_1d_new(n_input, NGF, starting_nbfeatures=128):
     fc = nn.Sequential(
         nn.Linear(n_input, 1024),
@@ -135,16 +154,14 @@ def create_generator_1d_new(n_input, NGF, starting_nbfeatures=128):
     )
     return fc, conv
 
-
-class G_with_fc(nn.Module):
+class G_with_fc_new(nn.Module):
     def __init__(self, dim_noise):
-        super(G_with_fc, self).__init__()
+        super(G_with_fc_new, self).__init__()
 
         self.starting_nbfeatures = 128
         self.width = 40
 
-        #self.fc, self.conv = create_generator_1d_new(n_input=dim_noise, NGF=self.width,
-        self.fc, self.conv = create_generator_1d(n_input=dim_noise, NGF=self.width,
+        self.fc, self.conv = create_generator_1d_new(n_input=dim_noise, NGF=self.width,
                                                  starting_nbfeatures=self.starting_nbfeatures)
 
     def forward(self, x):
@@ -153,6 +170,7 @@ class G_with_fc(nn.Module):
         x = self.conv(x)
         x = x.squeeze()
         return x
+"""
 
 
 class G_without_fc(nn.Module):
@@ -188,8 +206,6 @@ class G_without_fc(nn.Module):
     def forward(self, x):
         x = x.view(x.shape[0], 1, x.shape[1])
         x = self.main(x)
-        print(x.shape)
-        1 / 0
         x = x.squeeze()
         return x
 

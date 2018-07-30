@@ -13,6 +13,7 @@ import sys
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
 from models.networks import G_with_fc as G
+#from models.networks import G_with_fc_new as G
 import pickle
 import matplotlib.pyplot as plt
 
@@ -166,7 +167,7 @@ class Generator:
             c13 = np.hstack([c, np.zeros_like(c), c])
             c23 = np.hstack([np.zeros_like(c), c, c])
             c_all = np.hstack([c, c, c])
-        cx = c1
+        cx = c3
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -258,7 +259,7 @@ class Generator:
             c13 = np.hstack([c, np.zeros_like(c), c])
             c23 = np.hstack([np.zeros_like(c), c, c])
             c_all = np.hstack([c, c, c])
-        cx = c_all
+        cx = c1
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))

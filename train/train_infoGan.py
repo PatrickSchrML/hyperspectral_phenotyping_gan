@@ -79,8 +79,9 @@ class Trainer:
 
         self.dim_noise = config["NOISE"]
         self.dim_code_conti = config["N_CONTI"]
+        self.dim_code_disc = config["NC"] * config["N_DISCRETE"]
         self.num_categories = config["NC"]
-        self.size_total = self.dim_noise + self.dim_code_conti + self.num_categories
+        self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
 
         self.batch_size = 40 * self.num_categories
         self.dataloader = DataLoader(batch_size=self.batch_size)
@@ -162,7 +163,7 @@ class Trainer:
         for epoch in range(n_epoch):
             for num_iters in range(num_batches):
 
-                x, _, _ = self.dataloader.fetch_batch(onehot=True, num_classes=config["NC"])
+                x, _, _ = self.dataloader.fetch_batch(onehot=False, num_classes=3)
                 # real part
                 optimD.zero_grad()
 
@@ -202,12 +203,14 @@ class Trainer:
                 reconstruct_loss = criterionD(probs_fake, label)
 
                 q_logits, q_mu, q_var = self.Q(fe_out)
-                class_ = torch.LongTensor(idx).cuda()
-                target = Variable(class_)
-                dis_loss = criterionQ_dis(q_logits, target)
+
+                # supervised training not implemented here, use train_infogan_supervised.üy
+                #class_ = torch.LongTensor(idx).cuda()
+                #target = Variable(class_)
+                #dis_loss = criterionQ_dis(q_logits, target)
                 con_loss = criterionQ_con(con_c, q_mu, q_var) * 1.  # 0.1
 
-                G_loss = reconstruct_loss + dis_loss + con_loss
+                G_loss = reconstruct_loss + con_loss  # + dis_loss
                 G_loss.backward()
                 optimG.step()
 
@@ -245,10 +248,10 @@ if __name__ == '__main__':
     config["NETG"] = config["NETG"].format("", opt.pretrained_epoch)
     config["NETD"] = config["NETD"].format("", opt.pretrained_epoch)
 
-    size_total = config["NOISE"] + config["N_CONTI"] + config["NC"]
+    size_total = config["NOISE"] + config["N_CONTI"] + (config["NC"] * config["N_DISCRETE"])
     fe = FrontEnd()
     d = D()
-    q = Q(dim_conti=config["N_CONTI"], dim_disc=config["NC"])
+    q = Q(dim_conti=config["N_CONTI"], dim_disc=config["NC"] * config["N_DISCRETE"])
     g = G(size_total)
 
     for i in [fe, d, q, g]:

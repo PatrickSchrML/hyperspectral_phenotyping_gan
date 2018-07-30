@@ -12,7 +12,7 @@ import sys
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
 from models.networks import FrontEnd, D, Q, weights_init
-from models.networks import G_with_fc as G
+from models.networks import G_with_fc05 as G
 #from models.networks import G_without_fc as G
 from config.config import config_dict as config
 import time
@@ -78,6 +78,7 @@ class Trainer:
 
         self.dim_noise = config["NOISE"]
         self.dim_code_conti = config["N_CONTI"]
+        self.dim_code_disc = config["NC"] * config["N_DISCRETE"]
         self.num_categories = config["NC"]
         self.size_total = self.dim_noise + self.dim_code_conti
 
@@ -153,7 +154,7 @@ class Trainer:
         for epoch in range(n_epoch):
             for num_iters in range(num_batches):
 
-                x, _, _ = self.dataloader.fetch_batch(onehot=True, num_classes=3)
+                x, _, _ = self.dataloader.fetch_batch(onehot=False, num_classes=3)
                 # real part
                 optimD.zero_grad()
 
