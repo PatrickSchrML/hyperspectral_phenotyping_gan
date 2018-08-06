@@ -9,14 +9,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import sys
+
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
-from data_loader import DataLoader
+from data_loader_hdr_pytorch import Hdr_dataset, save_model, save_image
 from models.networks import FrontEnd, D, Q, weights_init
 from models.networks import G_with_fc as G
-from config.config import config_dict as config
-import time
+from config.config_hdr import config_dict as config
+from torch.utils.data import DataLoader
 import pickle
-
+from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('--pretrained', help='use pretrained model for initialization', action="store_true")
 parser.add_argument('--pretrained_epoch', default=0, help='epoch of pretrained model')
@@ -42,12 +43,12 @@ try:
     os.makedirs(OUTF_samples)
 except OSError:
     pass
-    #raise ValueError("OUT-dir already exists")
+    # raise ValueError("OUT-dir already exists")
 try:
     os.makedirs(OUTF_model)
 except OSError:
     pass
-    #raise ValueError("OUT-dir already exists")
+    # raise ValueError("OUT-dir already exists")
 
 
 def save_config(path_config, data):
@@ -81,11 +82,15 @@ class Trainer:
         self.dim_code_conti = config["N_CONTI"]
         self.dim_code_disc = config["NC"] * config["N_DISCRETE"]
         self.num_categories = config["NC"]
-        self.dim_signature = config["NDF"]
         self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
+        self.dim_signature = config["NDF"]
 
-        self.batch_size = 40 * self.num_categories
-        self.dataloader = DataLoader(batch_size=self.batch_size)
+        self.batch_size = 128  # 40 * self.num_categories
+        dataset = Hdr_dataset(load_to_mem=True)
+        self.num_batches = len(dataset) // self.batch_size
+        print("Num samples:", len(dataset), ", Num batches:", self.num_batches)
+        self.dataloader = DataLoader(dataset, batch_size=self.batch_size,
+                                     shuffle=True, num_workers=1, drop_last=True)
 
     def _set_noise(self, noise, dis_c, con_c):
         z_ = []  # [noise, dis_c, con_c]
@@ -115,7 +120,7 @@ class Trainer:
 
     def train(self):
 
-        real_x = torch.FloatTensor(self.batch_size, self.dim_signature).cuda()  # TODO
+        real_x = torch.FloatTensor(self.batch_size, self.dim_signature).cuda()
         label = torch.FloatTensor(self.batch_size).cuda()
         dis_c = torch.FloatTensor(self.batch_size, self.num_categories).cuda()
         con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
@@ -128,7 +133,7 @@ class Trainer:
         noise = Variable(noise)
 
         criterionD = nn.BCELoss().cuda()
-        criterionQ_dis = nn.CrossEntropyLoss().cuda()
+        criterionQ_dis = nn.CrossEntropyLoss().cuda()  # supervised labels
         criterionQ_con = log_gaussian()
 
         optimD = optim.Adam([{'params': self.FE.parameters()},
@@ -140,7 +145,6 @@ class Trainer:
                              {'params': self.Q.parameters()}],
                             lr=0.0001,  # 0.001
                             betas=(0.5, 0.99))
-
 
         # fixed random variables
         batch_size_eval = self.batch_size
@@ -155,14 +159,10 @@ class Trainer:
         one_hot = np.zeros((batch_size_eval, self.num_categories))
         one_hot[range(batch_size_eval), idx] = 1
         fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
-
-        num_batches = self.dataloader.size_train // self.batch_size
-
         n_epoch = 5000
-        for epoch in range(n_epoch):
-            for num_iters in range(num_batches):
+        for epoch in tqdm(range(n_epoch)):
+            for i_batch, x in enumerate(self.dataloader):
 
-                x, _, _ = self.dataloader.fetch_batch(onehot=False, num_classes=3)
                 # real part
                 optimD.zero_grad()
 
@@ -204,18 +204,18 @@ class Trainer:
                 q_logits, q_mu, q_var = self.Q(fe_out)
 
                 # supervised training not implemented here, use train_infogan_supervised.üy
-                #class_ = torch.LongTensor(idx).cuda()
-                #target = Variable(class_)
-                #dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * .05  # 0.1
+                # class_ = torch.LongTensor(idx).cuda()
+                # target = Variable(class_)
+                # dis_loss = criterionQ_dis(q_logits, target)
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * .1  # 0.1
 
                 G_loss = reconstruct_loss + con_loss  # + dis_loss
                 G_loss.backward()
                 optimG.step()
 
-                if num_iters == num_batches - 1 and (epoch + 1) % 100 == 0:
+                if i_batch == self.num_batches - 1 and (epoch + 1) % 100 == 0:
                     print('Epoch/Iter:{0}/{1}, Dloss: {2}, Gloss: {3}'.format(
-                        epoch + 1, num_iters, D_loss.data.cpu().numpy(),
+                        epoch + 1, i_batch, D_loss.data.cpu().numpy(),
                         G_loss.data.cpu().numpy())
                     )
 
@@ -225,20 +225,21 @@ class Trainer:
                     con_c.data.copy_(torch.from_numpy(c1))
                     z = self._set_noise(noise, dis_c, con_c)
                     x_save = self.G(z)
-                    self.dataloader.save_image(x_save.data,
-                                          '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
+                    save_image(x_save.data,
+                               '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
 
-            if (epoch + 1) < 2000 and (epoch + 1) % 250 == 0:
-                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+            if (epoch + 1) < 2000 and (epoch + 1) % 100 == 0:
+                save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
 
             if (epoch + 1) >= 2000 and (epoch + 1) % 1000 == 0 or epoch == n_epoch - 1:
-                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+    print("Finished training GAN, saved to:", OUTF_model)
 
 if __name__ == '__main__':
 

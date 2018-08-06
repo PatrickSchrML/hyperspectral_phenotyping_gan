@@ -22,6 +22,7 @@ parser.add_argument('--nc', default=3, required=False, help='dim of category cod
 parser.add_argument('--n_conti', default=2, required=False, help='')
 parser.add_argument('--n_dis', default=1, required=False, help='')
 parser.add_argument('--n_noise', default=10, required=False, help='')
+parser.add_argument('--dataset', default="", required=True, help='set to hdr to load files from bonn experiment')
 
 parser.add_argument('--outf_suffix', default="", required=False, help='')
 
@@ -132,12 +133,13 @@ class Generator:
 
         batch_size_eval = self.batch_size
 
+        """
         batch_x_mean, _ = self.dataloader.fetch_samples_mean()
         batch_x_mean = batch_x_mean.numpy()
         batch_x_real, batch_y_real = self.dataloader.fetch_samples(
             num_sample_each_class=batch_size_eval * 10 // self.num_categories)
         batch_x_real, batch_y_real = batch_x_real.numpy(), batch_y_real.numpy()
-
+        """
         label = torch.FloatTensor(self.batch_size).cuda()
         dis_c = torch.FloatTensor(self.batch_size, self.num_categories).cuda()
         con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
@@ -167,7 +169,7 @@ class Generator:
             c13 = np.hstack([c, np.zeros_like(c), c])
             c23 = np.hstack([np.zeros_like(c), c, c])
             c_all = np.hstack([c, c, c])
-        cx = c3
+        cx = c1
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -205,8 +207,8 @@ class Generator:
             category = label
             # category = 0 if label == 2 else 2 if label == 0 else 1
 
-            mean_of_category = None if label > 2 else batch_x_mean[category]
-            x_real_of_category = None if label > 2 else batch_x_real[batch_y_real == category]
+            mean_of_category = None  #if label > 2 else batch_x_mean[category]
+            x_real_of_category = None  #if label > 2 else batch_x_real[batch_y_real == category]
 
             plot_fake(x_save[num_samples[label]:num_samples[label + 1]],
                       self.num_categories, 2, label,
@@ -219,12 +221,13 @@ class Generator:
         self.batch_size = 9
         batch_size_eval = self.batch_size
 
+        """
         batch_x_mean, _ = self.dataloader.fetch_samples_mean()
         batch_x_mean = batch_x_mean.numpy()
         batch_x_real, batch_y_real = self.dataloader.fetch_samples(
             num_sample_each_class=batch_size_eval * 10 // self.num_categories)
         batch_x_real, batch_y_real = batch_x_real.numpy(), batch_y_real.numpy()
-
+        """
         label = torch.FloatTensor(self.batch_size).cuda()
         con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
         noise = torch.FloatTensor(self.batch_size, self.dim_noise).cuda()
@@ -254,9 +257,9 @@ class Generator:
         if self.dim_code_conti == 3:
             c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
             c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
-            c12 = np.hstack([c, c, np.zeros_like(c)])
+            c12 = np.hstack([c, -c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
-            c13 = np.hstack([c, np.zeros_like(c), c])
+            c13 = np.hstack([c, np.zeros_like(c), -c])
             c23 = np.hstack([np.zeros_like(c), c, c])
             c_all = np.hstack([c, c, c])
         cx = c1
@@ -308,16 +311,18 @@ if __name__ == '__main__':
     if opt.semisup:
         out_path += "_supervised"
 
-    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}".format(out_path)
+    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models{}/{}".format(opt.dataset,
+                                                                                                        out_path)
     # config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
     config_path += "/model{}".format("")
     config = load_config(os.path.join(config_path, "config.p"))
 
     size_total = config["NOISE"] + config["N_CONTI"] + (config["NC"] * config["N_DISCRETE"])
-    g = G(size_total)
+    print(config["NDF"])
+    g = G(size_total, config["NDF"])
 
-    NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(
-        out_path, "{}", "{}", "-crossval-0")
+    NETG_generate = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models{}/{}/model{}/netG_epoch_{}{}.pth".format(
+        opt.dataset, out_path, "{}", "{}", "-crossval-0")
     # NETG_generate = NETG_generate.format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "", opt.epoch)
     NETG_generate = NETG_generate.format("", opt.epoch)
 

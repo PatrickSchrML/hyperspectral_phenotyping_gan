@@ -11,7 +11,7 @@ import scipy.io
 import sys
 import torchvision.utils as vutils
 from sklearn.model_selection import StratifiedShuffleSplit
-
+import time
 sys.path.append('/home/patrick/repositories/hyperspec')
 from data_helper.helper import get_x_y_pos, get_x_y_pos_veg, get_data, get_data_by_idx
 
@@ -136,6 +136,8 @@ class DataLoader:
         return data_train, targets_train, data_test, targets_test, meta
 
     def fetch_batch(self, onehot=False, num_classes=-1):
+        time_start0 = time.process_time()
+
         if self.currentIndex >= self.size_train - self.batch_size:
             self.currentIndex = 0
 
@@ -165,6 +167,8 @@ class DataLoader:
         else:
             batch_y_ = torch.FloatTensor(batch_y)
 
+        print((time.process_time() - time_start0))
+        1 / 0
         return batch_x, batch_y_, torch.LongTensor(batch_sup_indices)
 
     def fetch_batch_splited_labels(self):

@@ -1,20 +1,20 @@
 BATCHSIZE = 32
 CONTI_MEAN = 0.
 CONTI_STD = 1.
-N_CONTI = 1
-N_DISCRETE = 0
-NOISE = 10  # 10
-NC = 1  # 5  # num classes
-NDF = 160  # dim output signal
+N_CONTI = 3
+N_DISCRETE = 1
+NOISE = 0  # 10
+NC = 2  # 5  # num classes
+NDF = 148  # dim output signal
 NGF = int(NDF / 4)
 CUDA = True
 NGPU = 1
 
 model_path = "generated_leaf_infogan-n_classes{}-n_discrete{}-n_conti{}-n_noise{}".format(NC, N_DISCRETE, N_CONTI, NOISE)
-NETG = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netG_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
-NETD = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}/model{}/netD_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
-#OUTF = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models/{}".format(model_path)
-OUTF = "/home/patrick/tmp"
+NETG = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_hdr/{}/model{}/netG_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
+NETD = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_hdr/{}/model{}/netD_epoch_{}{}.pth".format(model_path, "{}", "{}", "-crossval-0")  # "./model"
+OUTF = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_hdr/{}".format(model_path)
+#OUTF = "/home/patrick/tmp"
 MANUALSEED = None
 
 if N_DISCRETE > 1:

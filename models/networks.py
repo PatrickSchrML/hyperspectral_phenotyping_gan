@@ -109,11 +109,11 @@ def create_generator_1d(n_input, NGF, starting_nbfeatures=128):
 
 
 class G_with_fc(nn.Module):
-    def __init__(self, dim_noise):
+    def __init__(self, dim_noise, dim_output):
         super(G_with_fc, self).__init__()
 
         self.starting_nbfeatures = 128
-        self.width = 40
+        self.width = dim_output // 4
 
         self.fc, self.conv = create_generator_1d(n_input=dim_noise, NGF=self.width,
                                                  starting_nbfeatures=self.starting_nbfeatures)
