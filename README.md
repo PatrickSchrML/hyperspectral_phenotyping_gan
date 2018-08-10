@@ -11,10 +11,10 @@ Hyperspectral phenotyping gan
 - [x] Learn style-(disease)-vector of uv toy-data
 - [x] Unsupervised classification on toy-data (uv)
 
+- [ ] Learn class related attributes
 - [ ] Learn to transform to unseen plants
 
------------------------
 #
-#### Implementation TODOs
-- [ ] merge implementation of .mat and .hdr datasets
-- [ ] faster reading of .hdr data
+#### Implementation TODOs:
+- [ ] Merge implementation of .mat and .hdr datasets
+- [ ] Faster reading of .hdr data
