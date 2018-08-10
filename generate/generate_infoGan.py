@@ -12,7 +12,8 @@ import sys
 
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
 from data_loader import DataLoader
-from models.networks import G_with_fc as G
+from models.networks import G_with_fc_nopadding as G
+#from models.networks import G_with_fc as G
 #from models.networks import G_with_fc_new as G
 import pickle
 import matplotlib.pyplot as plt
@@ -35,6 +36,8 @@ parser.set_defaults(interpolate=False)
 opt = parser.parse_args()
 
 sup_ratio = float(opt.sup_ratio)  # 0.1
+
+np.random.seed(0)
 
 
 def save_config(path_config, data):
@@ -140,12 +143,10 @@ class Generator:
             num_sample_each_class=batch_size_eval * 10 // self.num_categories)
         batch_x_real, batch_y_real = batch_x_real.numpy(), batch_y_real.numpy()
         """
-        label = torch.FloatTensor(self.batch_size).cuda()
         dis_c = torch.FloatTensor(self.batch_size, self.num_categories).cuda()
         con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
         noise = torch.FloatTensor(self.batch_size, self.dim_noise).cuda()
 
-        label = Variable(label, requires_grad=False)
         dis_c = Variable(dis_c)
         con_c = Variable(con_c)
         noise = Variable(noise)
@@ -164,12 +165,12 @@ class Generator:
         if self.dim_code_conti == 3:
             c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
             c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
-            c12 = np.hstack([c, -c, np.zeros_like(c)])
+            c12 = np.hstack([c, c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
-            c13 = np.hstack([c, np.zeros_like(c), c])
-            c23 = np.hstack([np.zeros_like(c), c, c])
+            c13 = np.hstack([c, np.zeros_like(c), -c])
+            c23 = np.hstack([np.zeros_like(c), c, -c])
             c_all = np.hstack([c, c, c])
-        cx = c1
+        cx = c2
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -180,16 +181,17 @@ class Generator:
             fix_noise = torch.Tensor(1, self.dim_noise).uniform_(-1, 1).repeat(batch_size_eval, 1)
         else:
             # random noise for each sample
+            #fix_noise = torch.zeros([batch_size_eval, self.dim_noise])
             fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
 
         # fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
 
-        label.data.resize_(self.batch_size, 1)
         dis_c.data.resize_(self.batch_size, self.num_categories)
         con_c.data.resize_(self.batch_size, self.dim_code_conti)
         noise.data.resize_(self.batch_size, self.dim_noise)
 
-        noise.data.copy_(fix_noise)
+        if self.dim_noise > 0:
+            noise.data.copy_(fix_noise)
         dis_c.data.copy_(torch.Tensor(one_hot))
 
         if interpolate:
@@ -247,7 +249,7 @@ class Generator:
         c4 = c2.copy()
         c5 = np.hstack([np.zeros_like(c), np.zeros_like(c), np.zeros_like(c), np.zeros_like(c), c])
         c12 = np.hstack([c, c])
-        c_all = np.hstack([c, c])
+        c_all = np.hstack([c, -c])
 
         if self.dim_code_conti > 3:
             for _ in range(self.dim_code_conti - 2):
@@ -260,9 +262,9 @@ class Generator:
             c12 = np.hstack([c, -c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
             c13 = np.hstack([c, np.zeros_like(c), -c])
-            c23 = np.hstack([np.zeros_like(c), c, c])
+            c23 = np.hstack([np.zeros_like(c), c, -c])
             c_all = np.hstack([c, c, c])
-        cx = c1
+        cx = c3
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))

@@ -11,9 +11,10 @@ from torch.autograd import Variable
 import sys
 
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
-from data_loader_hdr_pytorch import Hdr_dataset, save_model, save_image
-from models.networks import FrontEnd, D, Q, weights_init
-from models.networks import G_with_fc as G
+from data_loader_hdr import Hdr_dataset, save_model, save_image
+from models.networks import Q_fc as Q
+from models.networks import FrontEnd, D, weights_init
+from models.networks import G_with_fc_nopadding as G
 from config.config_hdr import config_dict as config
 from torch.utils.data import DataLoader
 import pickle
@@ -85,12 +86,12 @@ class Trainer:
         self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
         self.dim_signature = config["NDF"]
 
-        self.batch_size = 128  # 40 * self.num_categories
+        self.batch_size = 150  # 40 * self.num_categories
         dataset = Hdr_dataset(load_to_mem=True)
         self.num_batches = len(dataset) // self.batch_size
         print("Num samples:", len(dataset), ", Num batches:", self.num_batches)
         self.dataloader = DataLoader(dataset, batch_size=self.batch_size,
-                                     shuffle=True, num_workers=1, drop_last=True)
+                                     shuffle=True, num_workers=4, drop_last=True)
 
     def _set_noise(self, noise, dis_c, con_c):
         z_ = []  # [noise, dis_c, con_c]
@@ -116,7 +117,7 @@ class Trainer:
 
         z = self._set_noise(noise, dis_c, con_c)
 
-        return z, idx
+        return z, torch.LongTensor(idx).cuda()
 
     def train(self):
 
@@ -134,6 +135,7 @@ class Trainer:
 
         criterionD = nn.BCELoss().cuda()
         criterionQ_dis = nn.CrossEntropyLoss().cuda()  # supervised labels
+        #criterionQ_dis_supervised = nn.CrossEntropyLoss().cuda()  # supervised labels
         criterionQ_con = log_gaussian()
 
         optimD = optim.Adam([{'params': self.FE.parameters()},
@@ -159,9 +161,9 @@ class Trainer:
         one_hot = np.zeros((batch_size_eval, self.num_categories))
         one_hot[range(batch_size_eval), idx] = 1
         fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
-        n_epoch = 5000
+        n_epoch = 3000
         for epoch in tqdm(range(n_epoch)):
-            for i_batch, x in enumerate(self.dataloader):
+            for i_batch, (x, _) in enumerate(self.dataloader):
 
                 # real part
                 optimD.zero_grad()
@@ -180,7 +182,7 @@ class Trainer:
                 loss_real.backward()
 
                 # fake part
-                z, idx = self._noise_sample(dis_c, con_c, noise, bs)
+                z, idx_dis_c = self._noise_sample(dis_c, con_c, noise, bs)
                 fake_x = self.G(z)
                 fe_out2 = self.FE(fake_x.detach())
                 probs_fake = self.D(fe_out2)
@@ -197,7 +199,7 @@ class Trainer:
 
                 fe_out = self.FE(fake_x)
                 probs_fake = self.D(fe_out)
-                label.data.fill_(1.0)
+                label.data.fill_(1)
 
                 reconstruct_loss = criterionD(probs_fake, label)
 
@@ -206,10 +208,14 @@ class Trainer:
                 # supervised training not implemented here, use train_infogan_supervised.üy
                 # class_ = torch.LongTensor(idx).cuda()
                 # target = Variable(class_)
-                # dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * .1  # 0.1
 
-                G_loss = reconstruct_loss + con_loss  # + dis_loss
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * config["CONTI_LR"]  # 0.1
+                if self.dim_code_disc == 0:
+                    G_loss = reconstruct_loss + con_loss
+                else:
+                    dis_loss = criterionQ_dis(q_logits, idx_dis_c) * config["DISCRETE_LR"]
+                    G_loss = reconstruct_loss + con_loss + dis_loss
+
                 G_loss.backward()
                 optimG.step()
 
@@ -239,7 +245,7 @@ class Trainer:
                 save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
                 save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
                 save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-    print("Finished training GAN, saved to:", OUTF_model)
+        print("Finished training GAN, saved to:", OUTF_model)
 
 if __name__ == '__main__':
 

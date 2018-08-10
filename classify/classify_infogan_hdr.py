@@ -17,10 +17,9 @@ from torch.autograd import Variable
 import sys
 
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
-from data_loader_hdr_pytorch import Hdr_dataset, save_model, save_image
-from models.networks import FrontEnd, D, Q, weights_init
-from models.networks import G_with_fc as G
-from config.config_hdr import config_dict as config
+from data_loader_hdr import Hdr_dataset, save_model, save_image
+from models.networks import Q_fc as Q
+from models.networks import FrontEnd
 from torch.utils.data import DataLoader
 import pickle
 from tqdm import tqdm
@@ -76,7 +75,7 @@ class Classifier:
         self.dim_signature = config["NDF"]
 
         self.batch_size = 128  # 40 * self.num_categories
-        self.dataset = Hdr_dataset(load_to_mem=False, train=False)
+        self.dataset = Hdr_dataset(load_to_mem=True, train=False)
         self.num_batches = len(self.dataset) // self.batch_size
         print("Num samples:", len(self.dataset), ", Num batches:", self.num_batches)
         self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size,
@@ -88,18 +87,17 @@ class Classifier:
         real_x = Variable(real_x)
 
         classification = np.empty([0])
-        for i_batch, x in tqdm(enumerate(self.dataloader)):
+        for i_batch, (x, _) in tqdm(enumerate(self.dataloader)):
             real_x.data.resize_(x.size())
             real_x.data.copy_(x)
+
             fe_out = self.FE(real_x)
-
             q_logits, _, _ = self.Q(fe_out)
-            q_classification = np.argmax(q_logits.data.cpu().numpy(), axis=1)
 
+            q_classification = np.argmax(q_logits.data.cpu().numpy(), axis=1)
             classification = np.hstack((classification, q_classification))
 
         self.dataset.classification(classification)
-        print(classification.shape)
 
     print("Finished classifying with GAN")
 
@@ -140,12 +138,9 @@ if __name__ == '__main__':
     q.eval()
 
     size_total = config["NOISE"] + config["N_CONTI"] + (config["NC"] * config["N_DISCRETE"])
-    fe = FrontEnd()
-    q = Q(dim_conti=config["N_CONTI"], dim_disc=config["NC"] * config["N_DISCRETE"])
 
     for i in [fe, q]:
         i.cuda()
-        i.apply(weights_init)
 
     classifier = Classifier(fe, q, config)
     classifier.classify()

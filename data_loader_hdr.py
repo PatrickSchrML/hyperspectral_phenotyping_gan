@@ -14,9 +14,12 @@ import time
 from multiprocessing import Pool
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import os
+
 sys.path.append('/home/patrick/repositories/hyperspec')
 
-#np.random.seed(0)
+
+# np.random.seed(0)
 
 
 def load_dataset_train(filename):
@@ -33,19 +36,29 @@ def normalize(data, max_value=None):
 
 class Hdr_dataset(Dataset):
     def __init__(self, train=True, load_to_mem=False):
-
+        path = "/media/disk2/datasets/hyperspectral_data_anna_bonn/parsed_data/dataset"
+        file_name = "dataset_small_10prozent.p"
         train_rowcol, train_lu_table, \
-        test_rowcol, test_lu_table = self.load_leaf()
+        test_rowcol, test_lu_table = self.load_leaf(os.path.join(path, file_name))
 
         self.lu_table = train_lu_table if train else test_lu_table
-        self.rowcol = train_rowcol if train else test_rowcol#[:1000]
+        self.rowcol = train_rowcol if train else test_rowcol  # [:1000]
         self.data = None
+        self.labels = None
         self.n_bands = 442
 
         if load_to_mem:
-            self.data = self.load_data_to_array()
+            data_path = os.path.join(path, "info_gan/dataset_small_10prozent_{}.p".format("train" if train else "test"))
+            if os.path.isfile(data_path):
+                data = pickle.load(open(data_path, "rb"))
+                self.data = data["x"]
+                self.labels = data["y"]
+            else:
+                data = self.load_data_to_array()
+                pickle.dump(data, open(data_path, "wb"))
+                self.data = data["x"]
+                self.labels = data["y"]
         # self.load_leaf()
-
         # compute which labels should be user for semi-supervised learning - by a mask
         """if sup_ratio < 1:
             sss = StratifiedShuffleSplit(n_splits=1, test_size=sup_ratio, random_state=1234)
@@ -59,7 +72,7 @@ class Hdr_dataset(Dataset):
         return len(self.rowcol)
 
     def __getitem__(self, idx):
-        if self.data is None:
+        if self.data is None or self.labels is None:
             return self.load_from_hdr(idx)
         else:
             return self.load_from_array(idx)
@@ -71,14 +84,14 @@ class Hdr_dataset(Dataset):
         np.nan_to_num(sample, copy=False)
         sample[sample > 1] = 1
         sample[sample < 0] = 0
-        return sample
+        return sample, (row, col, key_lu_table)
 
     def load_from_array(self, idx):
-        return self.data[idx]
+        return self.data[idx], self.labels[idx]
 
-    def load_leaf(self):
+    def load_leaf(self, path):
         dataset_dict = pickle.load(
-            open("/media/disk2/datasets/hyperspectral_data_anna_bonn/parsed_data/dataset/dataset_small_10prozent.p", "rb"))
+            open(path, "rb"))
         train_data = dataset_dict["train"]
         test_data = dataset_dict["test"]
         lu_table_train = dataset_dict["lookup_table_train"]
@@ -99,6 +112,7 @@ class Hdr_dataset(Dataset):
     def load_data_to_array(self):
         data = self.rowcol
         data_list = list()
+        label_list = list()
         for sample in tqdm(data):
             (row, col, key_lu_table) = sample
             img = self.lu_table[key_lu_table]["hdr"]
@@ -108,12 +122,20 @@ class Hdr_dataset(Dataset):
             sample[sample < 0] = 0
 
             data_list.append(sample)
-        return data_list
-    
+            label_list.append((row, col, key_lu_table))
+        data_dict = dict()
+        data_dict["x"] = data_list
+        data_dict["y"] = label_list
+        return data_dict
+
     def classification(self, labels, type="uv"):
-        
+
         assert len(labels) == len(self.rowcol)
+
         for lu_table_key in list(self.lu_table.keys()):
+            plt.figure(figsize=[15, 15])
+            plt.subplot()
+            plt.title(self.lu_table[lu_table_key]["file_path"])
             img = self.lu_table[lu_table_key]["hdr"]
             classification_of_file = labels[self.rowcol[:, 2] == lu_table_key]
             classification_of_file += 1  # zeros for background (not all the data of the imgis in the dataset)
@@ -125,9 +147,9 @@ class Hdr_dataset(Dataset):
                 rgb_bands = [405, 229, 53]
             img_rgb = img.read_bands(rgb_bands)
             plt.imshow(img_rgb)
-            plt.imshow(labels_of_file, alpha=0.6)
-        
-            plt.show()
+            plt.imshow(labels_of_file, alpha=1.)
+
+        plt.show()
 
 
 def save_model(state_dict, path):
@@ -147,7 +169,7 @@ def test(load_to_mem):
     time_start = time.time()
     for i_batch, sample_batched in enumerate(dataloader):
         print(i_batch, sample_batched.size())
-        #if i_batch == 100:
+        # if i_batch == 100:
     print(time.time() - time_start)
 
 
@@ -162,6 +184,7 @@ def show_samples(load_to_mem):
             plt.plot(x, alpha=0.3)
         plt.show()
 
+
 if __name__ == '__main__':
     test(load_to_mem=True)
-    #show_samples(load_to_mem=True)
+    # show_samples(load_to_mem=True)

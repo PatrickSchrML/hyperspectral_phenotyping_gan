@@ -207,7 +207,7 @@ class Trainer:
                 #class_ = torch.LongTensor(idx).cuda()
                 #target = Variable(class_)
                 #dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * .05  # 0.1
+                con_loss = criterionQ_con(con_c, q_mu, q_var) * .1  # 0.1
 
                 G_loss = reconstruct_loss + con_loss  # + dis_loss
                 G_loss.backward()
