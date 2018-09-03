@@ -16,5 +16,5 @@ Hyperspectral phenotyping gan
 
 #
 #### Implementation TODOs:
-- [ ] Merge implementation of .mat and .hdr datasets
+- [x] Merge implementation of .mat and .hdr datasets
 - [ ] Faster reading of .hdr data
