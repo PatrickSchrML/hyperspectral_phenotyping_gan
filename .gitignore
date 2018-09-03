@@ -19,8 +19,13 @@ __init__\.py
 /trained_models*/*
 /experiments_hdr_old/*
 /experiments_old/*
-completion/completion_old\.py
-experiments_old/
-models/networks_only_fc_test\.py
+/completion/completion_old\.py
+/experiments_old/
+/models/networks_only_fc_test\.py
+/classify/classify_infogan_old\.py
+/config/config\.py
+/train/train_infoGan_without_discrete_code_OLD\.py
+/train/train_infoGan_mat\.py
+/train/train_infoGan_supervised\.py
 
 playground/cerc15dai175\.mat
