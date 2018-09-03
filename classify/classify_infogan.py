@@ -17,7 +17,8 @@ from torch.autograd import Variable
 import sys
 
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
-from data_loader_hdr import Hdr_dataset, save_model, save_image
+from data_loader_hdr import Hdr_dataset
+from data_loader_mat import Mat_dataset
 from models.networks import Q_fc as Q
 from models.networks import FrontEnd
 from torch.utils.data import DataLoader
@@ -40,11 +41,6 @@ parser.set_defaults(semisup=False)
 opt = parser.parse_args()
 
 sup_ratio = float(opt.sup_ratio)  # 0.1
-
-
-def save_config(path_config, data):
-    pickle.dump(data, open(path_config, "wb"))
-    print("Saved config to:", path_config)
 
 
 def load_config(path_config):
@@ -75,7 +71,11 @@ class Classifier:
         self.dim_signature = config["NDF"]
 
         self.batch_size = 128  # 40 * self.num_categories
-        self.dataset = Hdr_dataset(load_to_mem=True, train=False)
+        if opt.dataset == "hdr":
+            self.dataset = Hdr_dataset(load_to_mem=True, train=False)
+        elif opt.dataset == "mat":
+            self.dataset = Mat_dataset(train=False, eval=True)
+
         self.num_batches = len(self.dataset) // self.batch_size
         print("Num samples:", len(self.dataset), ", Num batches:", self.num_batches)
         self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size,
@@ -87,7 +87,7 @@ class Classifier:
         real_x = Variable(real_x)
 
         classification = np.empty([0])
-        for i_batch, (x, _) in tqdm(enumerate(self.dataloader)):
+        for i_batch, (x, _, _) in tqdm(enumerate(self.dataloader)):
             real_x.data.resize_(x.size())
             real_x.data.copy_(x)
 
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     if opt.semisup:
         out_path += "_supervised"
 
-    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models{}/{}".format(opt.dataset,
+    config_path = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_{}/{}".format(opt.dataset,
                                                                                                         out_path)
     # config_path += "/model{}".format("_ratio-{}".format(int(sup_ratio * 100)) if opt.semisup else "")
     config_path += "/model{}".format("")
@@ -124,10 +124,10 @@ if __name__ == '__main__':
     fe = FrontEnd()
     q = Q(dim_conti=config["N_CONTI"], dim_disc=config["NC"] * config["N_DISCRETE"])
 
-    NETFE = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models{}/{}/model{}/netFE_epoch_{}{}.pth".format(
+    NETFE = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_{}/{}/model{}/netFE_epoch_{}{}.pth".format(
         opt.dataset, out_path, "{}", "{}", "-crossval-0")
     NETFE = NETFE.format("", opt.epoch)
-    NETQ = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models{}/{}/model{}/netQ_epoch_{}{}.pth".format(
+    NETQ = "/home/patrick/repositories/hyperspectral_phenotyping_gan/trained_models_{}/{}/model{}/netQ_epoch_{}{}.pth".format(
         opt.dataset, out_path, "{}", "{}", "-crossval-0")
     NETQ = NETQ.format("", opt.epoch)
 

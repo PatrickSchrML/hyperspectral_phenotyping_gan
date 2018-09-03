@@ -13,4 +13,14 @@ __init__\.py
 
 *.p
 
+*.pdf
+
 /old/*
+/trained_models*/*
+/experiments_hdr_old/*
+/experiments_old/*
+completion/completion_old\.py
+experiments_old/
+models/networks_only_fc_test\.py
+
+playground/cerc15dai175\.mat

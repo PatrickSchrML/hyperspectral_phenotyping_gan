@@ -100,9 +100,13 @@ class Q_fc(nn.Module):
         #self.conv_var = nn.Conv1d(128, dim_conti, 1)
 
         # TODO check if fully connected layer work better
+        #self.fc_disc = nn.Sequential(
+        #    nn.Linear(128, dim_disc),
+        #    nn.Sigmoid()
+        #) if self.dim_disc != 0 else None
         self.fc_disc = nn.Linear(128, dim_disc) if self.dim_disc != 0 else None
-        self.fc_mu = nn.Linear(128, dim_conti)
-        self.fc_var = nn.Linear(128, dim_conti)
+        self.fc_mu = nn.Linear(128, dim_conti) if self.dim_conti != 0 else None
+        self.fc_var = nn.Linear(128, dim_conti) if self.dim_conti != 0 else None
 
     def forward(self, x):
         x = self.conv(x)
@@ -112,8 +116,12 @@ class Q_fc(nn.Module):
             disc_logits = None
         else:
             disc_logits = self.fc_disc(y).squeeze()
-        mu = self.fc_mu(y).squeeze()
-        var = self.fc_var(y).squeeze().exp()
+        if self.dim_conti == 0:
+            mu = None
+            var = None
+        else:
+            mu = self.fc_mu(y).squeeze()
+            var = self.fc_var(y).squeeze().exp()
 
         return disc_logits, mu, var
 

@@ -170,7 +170,7 @@ class Generator:
             c13 = np.hstack([c, np.zeros_like(c), -c])
             c23 = np.hstack([np.zeros_like(c), c, -c])
             c_all = np.hstack([c, c, c])
-        cx = c2
+        cx = c3
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))
@@ -259,12 +259,12 @@ class Generator:
         if self.dim_code_conti == 3:
             c1 = np.hstack([c, np.zeros_like(c), np.zeros_like(c)])
             c2 = np.hstack([np.zeros_like(c), c, np.zeros_like(c)])
-            c12 = np.hstack([c, -c, np.zeros_like(c)])
+            c12 = np.hstack([c, c, np.zeros_like(c)])
             c3 = np.hstack([np.zeros_like(c), np.zeros_like(c), c])
             c13 = np.hstack([c, np.zeros_like(c), -c])
             c23 = np.hstack([np.zeros_like(c), c, -c])
             c_all = np.hstack([c, c, c])
-        cx = c3
+        cx = c1
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
         one_hot = np.zeros((batch_size_eval, self.num_categories))

@@ -69,7 +69,10 @@ class Hdr_dataset(Dataset):
             self.y_sup_mask = np.array([True for _ in range(len(self.y_train))])"""
 
     def __len__(self):
-        return len(self.rowcol)
+        if self.data is None or self.labels is None:
+            return len(self.rowcol)
+        else:
+            return len(self.data)
 
     def __getitem__(self, idx):
         if self.data is None or self.labels is None:
@@ -84,7 +87,7 @@ class Hdr_dataset(Dataset):
         np.nan_to_num(sample, copy=False)
         sample[sample > 1] = 1
         sample[sample < 0] = 0
-        return sample, (row, col, key_lu_table)
+        return sample, key_lu_table, (row, col)
 
     def load_from_array(self, idx):
         return self.data[idx], self.labels[idx]
@@ -135,7 +138,7 @@ class Hdr_dataset(Dataset):
         for lu_table_key in list(self.lu_table.keys()):
             plt.figure(figsize=[15, 15])
             plt.subplot()
-            plt.title(self.lu_table[lu_table_key]["file_path"])
+            #plt.title(self.lu_table[lu_table_key]["file_path"])
             img = self.lu_table[lu_table_key]["hdr"]
             classification_of_file = labels[self.rowcol[:, 2] == lu_table_key]
             classification_of_file += 1  # zeros for background (not all the data of the imgis in the dataset)
@@ -148,6 +151,7 @@ class Hdr_dataset(Dataset):
             img_rgb = img.read_bands(rgb_bands)
             plt.imshow(img_rgb)
             plt.imshow(labels_of_file, alpha=1.)
+            plt.axis("off")
 
         plt.show()
 

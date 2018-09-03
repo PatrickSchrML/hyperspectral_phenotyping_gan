@@ -3,25 +3,40 @@
 import argparse
 import numpy as np
 import os
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import sys
+
 sys.path.append("/home/patrick/repositories/hyperspectral_phenotyping_gan")
-from data_loader import DataLoader
-from models.networks import FrontEnd, D, Q, weights_init
-from models.networks import G_with_fc as G
-from config.config import config_dict as config
-import time
+from data_loader_hdr import Hdr_dataset, save_model, save_image
+from data_loader_mat import Mat_dataset
+from models.networks import Q_fc as Q
+from models.networks import FrontEnd, D, weights_init
+from models.networks import G_with_fc_nopadding as G
+from config.config_hdr import config_dict as config_hdr
+from config.config_mat import config_dict as config_mat
+from torch.utils.data import DataLoader
 import pickle
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pretrained', help='use pretrained model for initialization', action="store_true")
+parser.add_argument('--semisupervised', help='use pretrained model for initialization', action="store_true")
 parser.add_argument('--pretrained_epoch', default=0, help='epoch of pretrained model')
+parser.add_argument('--dataset', default="mat", help='mat or hdr')
+parser.add_argument('--epochs', default=3000, help='number of epochs to train')
+
 parser.set_defaults(pretrained=False)
+parser.set_defaults(pretrained=False)
+
 opt = parser.parse_args()
+
+if opt.dataset == "mat":
+    config = config_mat
+else:
+    config = config_hdr
 
 created_outf = [False, 0, config["OUTF"]]
 
@@ -42,12 +57,12 @@ try:
     os.makedirs(OUTF_samples)
 except OSError:
     pass
-    #raise ValueError("OUT-dir already exists")
+    # raise ValueError("OUT-dir already exists")
 try:
     os.makedirs(OUTF_model)
 except OSError:
     pass
-    #raise ValueError("OUT-dir already exists")
+    # raise ValueError("OUT-dir already exists")
 
 
 def save_config(path_config, data):
@@ -70,7 +85,7 @@ class log_gaussian:
 
 
 class Trainer:
-    def __init__(self, G, FE, D, Q, config):
+    def __init__(self, G, FE, D, Q, config, dataset):
 
         self.G = G
         self.FE = FE
@@ -81,11 +96,14 @@ class Trainer:
         self.dim_code_conti = config["N_CONTI"]
         self.dim_code_disc = config["NC"] * config["N_DISCRETE"]
         self.num_categories = config["NC"]
-        self.dim_signature = config["NDF"]
         self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
+        self.dim_signature = config["NDF"]
 
-        self.batch_size = 40 * self.num_categories
-        self.dataloader = DataLoader(batch_size=self.batch_size)
+        self.batch_size = 150  # 40 * self.num_categories
+        self.num_batches = len(dataset) // self.batch_size
+        print("Num samples:", len(dataset), ", Num batches:", self.num_batches)
+        self.dataloader = DataLoader(dataset, batch_size=self.batch_size,
+                                     shuffle=True, num_workers=4, drop_last=True)
 
     def _set_noise(self, noise, dis_c, con_c):
         z_ = []  # [noise, dis_c, con_c]
@@ -107,15 +125,17 @@ class Trainer:
 
         dis_c.data.copy_(torch.Tensor(c))
         con_c.data.uniform_(-1.0, 1.0)
+        # con_c.data.normal_(0, 1.)
+        # con_c.data.normal_(0, 0.25)
         noise.data.uniform_(-1.0, 1.0)
 
         z = self._set_noise(noise, dis_c, con_c)
 
-        return z, idx
+        return z, torch.LongTensor(idx).cuda()
 
     def train(self):
 
-        real_x = torch.FloatTensor(self.batch_size, self.dim_signature).cuda()  # TODO
+        real_x = torch.FloatTensor(self.batch_size, self.dim_signature).cuda()
         label = torch.FloatTensor(self.batch_size).cuda()
         dis_c = torch.FloatTensor(self.batch_size, self.num_categories).cuda()
         con_c = torch.FloatTensor(self.batch_size, self.dim_code_conti).cuda()
@@ -128,19 +148,25 @@ class Trainer:
         noise = Variable(noise)
 
         criterionD = nn.BCELoss().cuda()
-        criterionQ_dis = nn.CrossEntropyLoss().cuda()
+        criterionQ_dis = nn.CrossEntropyLoss().cuda()  # supervised labels
+        criterionQ_dis_supervised = nn.CrossEntropyLoss().cuda()  # supervised labels
         criterionQ_con = log_gaussian()
 
-        optimD = optim.Adam([{'params': self.FE.parameters()},
-                             {'params': self.D.parameters()}],
-                            lr=0.0001,  # 0.0002
-                            betas=(0.5, 0.99))
+        optimD_params = [{'params': self.FE.parameters()},
+                         {'params': self.D.parameters()}]
+
+        if opt.semisupervised:
+            optimD_params.append({'params': self.Q.parameters()})
+
+        optimD = optim.Adam(optimD_params,
+                                lr=0.0001,  # 0.0002
+                                betas=(0.5, 0.99))
+
         optimG = optim.Adam([{'params': self.G.parameters()},
                              {'params': self.FE.parameters()},
                              {'params': self.Q.parameters()}],
                             lr=0.0001,  # 0.001
                             betas=(0.5, 0.99))
-
 
         # fixed random variables
         batch_size_eval = self.batch_size
@@ -152,17 +178,13 @@ class Trainer:
                 c1 = np.hstack([c1, np.zeros_like(c)])
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
-        one_hot = np.zeros((batch_size_eval, self.num_categories))
-        one_hot[range(batch_size_eval), idx] = 1
-        fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+        #one_hot = np.zeros((batch_size_eval, self.num_categories))
+        #one_hot[range(batch_size_eval), idx] = 1
+        #fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+        n_epoch = int(opt.epochs)
+        for epoch in tqdm(range(n_epoch)):
+            for i_batch, (x, y, _) in enumerate(self.dataloader):
 
-        num_batches = self.dataloader.size_train // self.batch_size
-
-        n_epoch = 5000
-        for epoch in range(n_epoch):
-            for num_iters in range(num_batches):
-
-                x, _, _ = self.dataloader.fetch_batch(onehot=False, num_classes=3)
                 # real part
                 optimD.zero_grad()
 
@@ -176,19 +198,25 @@ class Trainer:
                 fe_out1 = self.FE(real_x)
                 probs_real = self.D(fe_out1)
                 label.data.fill_(1)
-                loss_real = criterionD(probs_real, label)
+                loss_real = 0.5 * torch.mean((probs_real - label) ** 2)  # criterionD(probs_real, label)
+
+                if opt.semisupervised:
+                    q_logits, _, _ = self.Q(fe_out1)
+                    discrete_loss_discriminator = criterionQ_dis_supervised(q_logits, y) * config["DISCRETE_LR_SUP"]
+                    loss_real += discrete_loss_discriminator
+
                 loss_real.backward()
 
                 # fake part
-                z, idx = self._noise_sample(dis_c, con_c, noise, bs)
+                z, idx_dis_c = self._noise_sample(dis_c, con_c, noise, bs)
                 fake_x = self.G(z)
                 fe_out2 = self.FE(fake_x.detach())
                 probs_fake = self.D(fe_out2)
                 label.data.fill_(0)
-                loss_fake = criterionD(probs_fake, label)
-                loss_fake.backward()
+                loss_fake = 0.5 * torch.mean((probs_fake - label) ** 2)  # criterionD(probs_fake, label)
 
-                D_loss = loss_real + loss_fake
+                loss_fake.backward()
+                D_loss = loss_real + loss_fake  # monitoring
 
                 optimD.step()
 
@@ -197,48 +225,66 @@ class Trainer:
 
                 fe_out = self.FE(fake_x)
                 probs_fake = self.D(fe_out)
-                label.data.fill_(1.0)
+                label.data.fill_(1)
 
-                reconstruct_loss = criterionD(probs_fake, label)
+                reconstruct_loss = 0.5 * torch.mean((probs_fake - label) ** 2)  # criterionD(probs_fake, label)
 
                 q_logits, q_mu, q_var = self.Q(fe_out)
 
-                # supervised training not implemented here, use train_infogan_supervised.üy
-                #class_ = torch.LongTensor(idx).cuda()
-                #target = Variable(class_)
-                #dis_loss = criterionQ_dis(q_logits, target)
-                con_loss = criterionQ_con(con_c, q_mu, q_var) * .1  # 0.1
+                if self.dim_code_conti == 0:
+                    con_loss = 0.
+                else:
+                    con_loss = criterionQ_con(con_c, q_mu, q_var) * config["CONTI_LR"]  # 0.1
+                if self.dim_code_disc == 0:
+                    G_loss = reconstruct_loss + con_loss  # monitoring
+                else:
+                    # if i_batch == len(self.dataloader) -1:
+                    #    print("- " * 10)
+                    #    print(idx_dis_c[:10])
+                    #    print(torch.argmax(q_logits, 1)[:10])
+                    #    print("- " * 10)
 
-                G_loss = reconstruct_loss + con_loss  # + dis_loss
+                    discrete_loss_generator = criterionQ_dis(q_logits, idx_dis_c) * config["DISCRETE_LR"]
+                    G_loss = reconstruct_loss + con_loss + discrete_loss_generator
+
                 G_loss.backward()
                 optimG.step()
 
-                if num_iters == num_batches - 1 and (epoch + 1) % 100 == 0:
+                if i_batch == self.num_batches - 1 and (epoch + 1) % 100 == 0:
                     print('Epoch/Iter:{0}/{1}, Dloss: {2}, Gloss: {3}'.format(
-                        epoch + 1, num_iters, D_loss.data.cpu().numpy(),
+                        epoch + 1, i_batch, D_loss.data.cpu().numpy(),
                         G_loss.data.cpu().numpy())
                     )
-
+                    """
                     noise.data.copy_(fix_noise)
                     dis_c.data.copy_(torch.Tensor(one_hot))
 
                     con_c.data.copy_(torch.from_numpy(c1))
                     z = self._set_noise(noise, dis_c, con_c)
                     x_save = self.G(z)
-                    self.dataloader.save_image(x_save.data,
-                                          '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
+                    save_image(x_save.data,
+                               '%s/call_fake_samples_epoch_%03d{}.png' % (OUTF_samples, epoch + 1))
+                    """
 
-            if (epoch + 1) < 2000 and (epoch + 1) % 250 == 0:
-                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+            if (epoch + 1) < 300 and (epoch + 1) % 20 == 0:
+                save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+
+            if 300 <= (epoch + 1) < 2000 and (epoch + 1) % 100 == 0:
+                save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
 
             if (epoch + 1) >= 2000 and (epoch + 1) % 1000 == 0 or epoch == n_epoch - 1:
-                self.dataloader.save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
-                self.dataloader.save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.G.state_dict(), '%s/netG_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.D.state_dict(), '%s/netD_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.FE.state_dict(), '%s/netFE_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+                save_model(self.Q.state_dict(), '%s/netQ_epoch_%d{}.pth' % (OUTF_model, epoch + 1))
+        print("Finished training GAN, saved to:", OUTF_model)
+
 
 if __name__ == '__main__':
 
@@ -257,5 +303,11 @@ if __name__ == '__main__':
         i.cuda()
         i.apply(weights_init)
 
-    trainer = Trainer(g, fe, d, q, config)
+    if opt.dataset == "mat":
+        print("SMALL Dataset")
+        dataset = Mat_dataset()
+    else:
+        dataset = Hdr_dataset(load_to_mem=True)
+
+    trainer = Trainer(g, fe, d, q, config, dataset)
     trainer.train()
