@@ -116,6 +116,65 @@ def plot_conti_code_as_img():
     plt.show()
 
 
+def plot_reconstructed_img():
+    style.use("default")
+    data = pickle.load(open(
+        "/home/patrick/repositories/hyperspectral_phenotyping_gan/experiments/generated_signatures_from_representation_dataset_{}_classes{}_disc{}_conti{}_noise{}_epoch{}{}.p".format(
+            opt.dataset,
+            opt.nc,
+            opt.n_dis,
+            opt.n_conti,
+            opt.n_noise,
+            opt.epoch,
+            opt.outf_suffix),
+        "rb"))
+
+    labels = np.array(data["y"]).squeeze()
+    real = np.array(data["x"])
+    fakes = np.array(data["fake"])
+
+    idx_in_img = np.array(data["origin_indices_in_img"])
+    meta = data["meta"]
+    dim = meta["dim"]
+
+    sorted_labels = np.array([x for _, x in sorted(zip(idx_in_img, labels))])
+    sorted_real_signatures = np.array([x for _, x in sorted(zip(idx_in_img, real))])
+    sorted_fake_signatures = np.array([x for _, x in sorted(zip(idx_in_img, fakes))])
+
+    sorted_real_signatures = np.vstack((np.vstack((sorted_real_signatures[:, 59],
+                                                   sorted_real_signatures[:, 23])),
+                                        sorted_real_signatures[:, 5])).T
+    sorted_fake_signatures = np.vstack((np.vstack((sorted_fake_signatures[:, 59],
+                                                   sorted_fake_signatures[:, 23])),
+                                        sorted_fake_signatures[:, 5])).T
+
+    img_labels = np.reshape(sorted_labels, newshape=[dim[0], dim[1]])
+    img_real_signatures = np.reshape(sorted_real_signatures, newshape=[dim[0], dim[1], 3])
+    img_fake_signatures = np.reshape(sorted_fake_signatures, newshape=[dim[0], dim[1], 3])
+
+    plt.figure(figsize=(15, 15))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img_real_signatures)
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img_fake_signatures)
+    plt.axis("off")
+
+    diff = np.square(img_real_signatures - img_fake_signatures)
+    #diff = np.sum(diff, axis=2)  # reduce to one dim
+    print(np.min(diff), np.max(diff))
+    min_diff = np.min(diff)
+    diff -= min_diff
+    max_diff = np.max(diff)
+    diff/= max_diff
+    #plt.subplot(1, 3, 3)
+    #plt.imshow(diff)
+    #plt.axis("off")
+
+    plt.show()
+
+
 def plot_manipulated_signatures():
     style.use("default")
     data = pickle.load(open(
@@ -278,5 +337,6 @@ def plot_manipulated_signatures_and_representation():
 if __name__ == '__main__':
     # plot_conti_code_tsne()
     #plot_conti_code_as_img()
-    plot_manipulated_signatures()
+    #plot_manipulated_signatures()
+    plot_reconstructed_img()
     #plot_manipulated_signatures_and_representation()

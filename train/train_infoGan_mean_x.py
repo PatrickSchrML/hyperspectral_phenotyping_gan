@@ -26,6 +26,7 @@ parser.add_argument('--pretrained', help='use pretrained model for initializatio
 parser.add_argument('--semisupervised', help='use pretrained model for initialization', action="store_true")
 parser.add_argument('--pretrained_epoch', default=0, help='epoch of pretrained model')
 parser.add_argument('--dataset', default="mat", help='mat or hdr')
+parser.add_argument('--meta_type', default="mean")
 parser.add_argument('--epochs', default=3000, help='number of epochs to train')
 
 parser.set_defaults(pretrained=False)
@@ -38,7 +39,7 @@ if opt.dataset == "mat":
 else:
     config = config_hdr
 
-outf = config["OUTF"].format("")
+outf = config["OUTF"].format("_test_"+ opt.meta_type)
 created_outf = [False, 0, outf]
 
 while not created_outf[0]:
@@ -99,11 +100,12 @@ class Trainer:
         self.num_categories = config["NC"]
         self.size_total = self.dim_noise + self.dim_code_conti + self.dim_code_disc
         self.dim_signature = config["NDF"]
+        self.dataset = dataset
 
         self.batch_size = 150  # 40 * self.num_categories
-        self.num_batches = len(dataset) // self.batch_size
-        print("Num samples:", len(dataset), ", Num batches:", self.num_batches)
-        self.dataloader = DataLoader(dataset, batch_size=self.batch_size,
+        self.num_batches = len(self.dataset) // self.batch_size
+        print("Num samples:", len(self.dataset), ", Num batches:", self.num_batches)
+        self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size,
                                      shuffle=True, num_workers=4, drop_last=True)
 
     def _set_noise(self, noise, dis_c, con_c):
@@ -132,6 +134,9 @@ class Trainer:
 
         return z, torch.LongTensor(idx).cuda()
 
+    def _knowledge_code(self, x):
+        return self.dataset.compute_knwoledge_code_from_data(x)
+
     def train(self):
 
         real_x = torch.FloatTensor(self.batch_size, self.dim_signature).cuda()
@@ -158,8 +163,8 @@ class Trainer:
             optimD_params.append({'params': self.Q.parameters()})
 
         optimD = optim.Adam(optimD_params,
-                                lr=0.0001,  # 0.0002
-                                betas=(0.5, 0.99))
+                            lr=0.0001,  # 0.0002
+                            betas=(0.5, 0.99))
 
         optimG = optim.Adam([{'params': self.G.parameters()},
                              {'params': self.FE.parameters()},
@@ -177,9 +182,9 @@ class Trainer:
                 c1 = np.hstack([c1, np.zeros_like(c)])
 
         idx = np.arange(self.num_categories).repeat(batch_size_eval // self.num_categories)
-        #one_hot = np.zeros((batch_size_eval, self.num_categories))
-        #one_hot[range(batch_size_eval), idx] = 1
-        #fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
+        # one_hot = np.zeros((batch_size_eval, self.num_categories))
+        # one_hot[range(batch_size_eval), idx] = 1
+        # fix_noise = torch.Tensor(batch_size_eval, self.dim_noise).uniform_(-1, 1)
         n_epoch = int(opt.epochs)
         for epoch in tqdm(range(n_epoch)):
             for i_batch, (x, y, _) in enumerate(self.dataloader):
@@ -194,7 +199,10 @@ class Trainer:
                 con_c.data.resize_(bs, self.dim_code_conti)
                 noise.data.resize_(bs, self.dim_noise)
                 real_x.data.copy_(x)
-                fe_out1 = self.FE(real_x)
+
+                real_x_z = torch.cat((real_x, self._knowledge_code(real_x).unsqueeze(dim=1)), 1)
+                fe_out1 = self.FE(real_x_z)  # self.FE(real_x)
+
                 probs_real = self.D(fe_out1)
                 label.data.fill_(1)
                 loss_real = 0.5 * torch.mean((probs_real - label) ** 2)  # criterionD(probs_real, label)
@@ -209,7 +217,9 @@ class Trainer:
                 # fake part
                 z, idx_dis_c = self._noise_sample(dis_c, con_c, noise, bs)
                 fake_x = self.G(z)
-                fe_out2 = self.FE(fake_x.detach())
+                fake_x_z = torch.cat((fake_x, z[:, -1].unsqueeze(dim=1)), 1)
+
+                fe_out2 = self.FE(fake_x_z.detach())  # self.FE(fake_x.detach())
                 probs_fake = self.D(fe_out2)
                 label.data.fill_(0)
                 loss_fake = 0.5 * torch.mean((probs_fake - label) ** 2)  # criterionD(probs_fake, label)
@@ -222,7 +232,7 @@ class Trainer:
                 # G and Q part
                 optimG.zero_grad()
 
-                fe_out = self.FE(fake_x)
+                fe_out = self.FE(fake_x_z)  # self.FE(fake_x)
                 probs_fake = self.D(fe_out)
                 label.data.fill_(1)
 
@@ -234,6 +244,7 @@ class Trainer:
                     con_loss = 0.
                 else:
                     con_loss = criterionQ_con(con_c, q_mu, q_var) * config["CONTI_LR"]  # 0.1
+
                 if self.dim_code_disc == 0:
                     G_loss = reconstruct_loss + con_loss  # monitoring
                 else:
@@ -305,7 +316,7 @@ if __name__ == '__main__':
 
     if opt.dataset == "mat":
         print("SMALL Dataset")
-        dataset = Mat_dataset()
+        dataset = Mat_dataset(meta_type=opt.meta_type)
     else:
         dataset = Hdr_dataset(load_to_mem=True)
 

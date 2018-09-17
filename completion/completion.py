@@ -23,7 +23,8 @@ from matplotlib import style
 
 from sklearn.neighbors import KDTree
 
-style.use("ggplot")
+# style.use("ggplot")
+style.use("fivethirtyeight")
 
 cmap_for_plt = plt.get_cmap("winter")
 
@@ -66,7 +67,7 @@ class Generator:
         self.size_signature = config["NDF"]
         self.batch_size = 128
 
-        if opt.dataset == "mat":
+        if opt.dataset.find("mat") != -1:
             print("SMALL Dataset")
             self.dataset = Mat_dataset(train=train, eval=eval)
         else:
@@ -86,25 +87,31 @@ class Generator:
                          ylim=(0, 1.0), color=None, with_nearest_neighbor=False):
         current_plot = current_row * num_col + current_col
 
+        clipping = -3
 
         if x_real is not None:
-            # PLOT REAL DATA
-            ax = plt.subplot(num_rows, num_col, current_plot)
-            # ax.grid(True)
-            plt.ylim(ylim[0], ylim[1])
-            plt.yticks(np.arange(0, ylim[1], .2))
-            plt.xticks(np.arange(0, 180, 60))
-            plt.title("Real", fontsize=20)
+            if len(x_real.shape) == 1:
+                x_real = np.expand_dims(x_real, 0)
+            for idx, x in enumerate(x_real):
+                # PLOT REAL DATA
+                ax = plt.subplot(num_rows, num_col, current_plot)
+                # ax.grid(True)
+                plt.ylim(ylim[0], ylim[1])
+                plt.yticks(np.arange(0, ylim[1], .2))
+                plt.xticks(np.arange(0, 180, 60))
+                #plt.title("Real", fontsize=20)
 
-            x = x_real.flatten()[:-3]  # hack to hide problem of conv at end of signature
-            linestyle = "--"
-            _, = plt.plot(x, linestyle, linewidth=6, alpha=0.5, color="b")
-            # plt.legend([l1], ["fake sample" + str(label[idx])])
+                x = x.flatten()[:clipping]  # hack to hide problem of conv at end of signature
+                linestyle = "--"
+                _, = plt.plot(x, linestyle, linewidth=6, alpha=0.5, color="b")
+                # plt.legend([l1], ["fake sample" + str(label[idx])])
             current_plot += 1
+        frame = plt.gca()
+        frame.axes.xaxis.set_ticklabels([])
+        frame.axes.yaxis.set_ticklabels([])
 
         # PLOT FAKE DATA
         for idx, x in enumerate(fakes):
-            clipping = -3
             ax = plt.subplot(num_rows, num_col, current_plot)
             # ax.grid(True)
             plt.ylim(ylim[0], ylim[1])
@@ -123,11 +130,11 @@ class Generator:
 
             if with_nearest_neighbor:
                 neighbor_idx = self.get_nearest_neighbor([x])
-                neighbor = self.complete_data[neighbor_idx.squeeze()]
+                neighbor = self.complete_data.data.cpu().numpy()[neighbor_idx.squeeze()]
                 neighbor_label = self.complete_labels[neighbor_idx.squeeze()]
                 _, = plt.plot(neighbor[:clipping], linestyle, linewidth=linewidth_fake, color="r",
-                              alpha=min(alpha-0.5, 0.3))
-                #plt.title("NN-label: {}".format(neighbor_label.item()), fontsize=20)
+                              alpha=min(alpha - 0.5, 0.3))
+                # plt.title("NN-label: {}".format(neighbor_label.item()), fontsize=20)
 
             if legend is not None:
                 legend = legend.squeeze()
@@ -136,6 +143,9 @@ class Generator:
         frame = plt.gca()
         frame.axes.xaxis.set_ticklabels([])
         frame.axes.yaxis.set_ticklabels([])
+
+    def plot_signatures(self, real, fakes):
+        self._plot_signatures(fakes, num_rows=1, num_col=2, x_real=real)
 
     def _set_noise(self, noise, code_disc, code_conti):
         z_ = []  # [noise, dis_c, con_c]
@@ -283,10 +293,62 @@ class Generator:
     def generate_and_interpolate(self, num_plt_rows=3, n_epochs=5000,
                                  dim_to_interpolate=0, num_interpolations=9,
                                  start_interpolation=-2.,
-                                 end_interpolation=2., fixed_noise=True):
+                                 end_interpolation=2., fixed_noise=True, show_title=True, only_interpolation=False,
+                                 with_nearest_neighbor=True, show_real=True):
 
-        plt.figure(figsize=(32, 20))
-        np.random.seed(2)
+        fig = plt.figure(figsize=(32, 20))
+        np.random.seed(3)
+        x_inputs, _ = self.dataset.fetch_samples(num_sample_each_class=1, shuffle=True)
+        #x_inputs, _ = self.dataset.fetch_row_col()
+        x_inputs = x_inputs.cuda()
+        # l = 45
+        # u = 120
+        # mask[:, l:u] = 0.0
+
+        fakes, z = self._generate_representation(x_inputs, batch_size=x_inputs.shape[0],
+                                                 n_epochs=n_epochs, fixed_noise=fixed_noise)
+        fakes = fakes.cpu().detach().numpy()
+        z = z.cpu().detach().numpy()
+        x_inputs = x_inputs.cpu().detach().numpy()
+        num_plt_col = 2 if show_real else 1
+        if only_interpolation:
+            num_plt_col -= 1
+        plt.subplots_adjust(left=0.125, bottom=0.1, right=0.9, top=0.9,
+                            wspace=0.0, hspace=0.0)
+        for idx in range(len(fakes)):
+            title = "Fake c_{}={:.2f}".format(dim_to_interpolate,
+                                              z[idx][-(self.dim_code_conti - dim_to_interpolate)]) if show_title else ""
+            plt_fake = fakes[idx:idx + 1] if not only_interpolation else []
+            self._plot_signatures(plt_fake,
+                                  num_rows=num_plt_rows,
+                                  num_col=num_plt_col + num_interpolations,
+                                  current_row=idx,
+                                  x_real=x_inputs[idx],
+                                  ylim=(0.0, 1.),
+                                  title=title)
+            # for dim_to_interpolate in
+            color = "g"
+            self.interpolate_continuous_code(z[idx],
+                                             num_interpolations=num_interpolations,
+                                             num_cols=num_plt_col,
+                                             num_rows=num_plt_rows,
+                                             current_row=idx,
+                                             dim_to_interpolate=dim_to_interpolate,
+                                             start_interpolation=start_interpolation,
+                                             end_interpolation=end_interpolation,
+                                             show_title=show_title,
+                                             color=color,
+                                             with_nearest_neighbor=with_nearest_neighbor)
+
+
+    def generate_and_interpolate_meta(self, num_plt_rows=3, n_epochs=5000,
+                                 dim_to_interpolate=0, num_interpolations=9,
+                                 start_interpolation=-2.,
+                                 end_interpolation=2., fixed_noise=True, show_title=True, only_interpolation=False,
+                                 with_nearest_neighbor=True, show_real=True):
+
+        fig = plt.figure(figsize=(32, 20))
+        np.random.seed(3)
         #x_inputs, _ = self.dataset.fetch_samples(num_sample_each_class=1, shuffle=True)
         x_inputs, _ = self.dataset.fetch_row_col()
         x_inputs = x_inputs.cuda()
@@ -299,24 +361,69 @@ class Generator:
         fakes = fakes.cpu().detach().numpy()
         z = z.cpu().detach().numpy()
         x_inputs = x_inputs.cpu().detach().numpy()
-        num_plt_col = 2 + num_interpolations
+        num_plt_col = 2 if show_real else 1
+        if only_interpolation:
+            num_plt_col -= 1
+        plt.subplots_adjust(left=0.125, bottom=0.1, right=0.9, top=0.9,
+                            wspace=0.0, hspace=0.0)
         for idx in range(len(fakes)):
-            self._plot_signatures(fakes[idx:idx + 1], num_rows=num_plt_rows, num_col=num_plt_col,
-                                  current_row=idx, x_real=x_inputs[idx],
-                                  ylim=(0.0, 0.9),
-                                  title="Fake c_{}={:.2f}".format(dim_to_interpolate,
-                                                                  z[idx][-(
-                                                                      self.dim_code_conti - dim_to_interpolate)]))
+            plt_fake = fakes[idx:idx + 1] if not only_interpolation else []
+            title = "" if show_title else ""
+            self._plot_signatures(plt_fake,
+                                  num_rows=num_plt_rows,
+                                  num_col=num_plt_col + num_interpolations,
+                                  current_row=idx,
+                                  x_real=x_inputs[idx],
+                                  ylim=(0.0, 1.),
+                                  title=title)
             # for dim_to_interpolate in
+            color = "g"
             self.interpolate_continuous_code(z[idx],
                                              num_interpolations=num_interpolations,
-                                             num_cols=2,
+                                             num_cols=num_plt_col,
                                              num_rows=num_plt_rows,
                                              current_row=idx,
                                              dim_to_interpolate=dim_to_interpolate,
                                              start_interpolation=start_interpolation,
-                                             end_interpolation=end_interpolation)
-        plt.show()
+                                             end_interpolation=end_interpolation,
+                                             show_title=show_title,
+                                             color=color,
+                                             with_nearest_neighbor=with_nearest_neighbor, title_type="mean")
+
+    def interpolate(self,
+                    dim_to_interpolate=0, num_interpolations=9,
+                    start_interpolation=-2.,
+                    end_interpolation=2., show_title=True,
+                    with_nearest_neighbor=True):
+
+        fig = plt.figure(figsize=(32, 20))
+        np.random.seed(2)
+
+        z = np.zeros([3, self.size_total])
+        #z[0].fill(-2)
+        #z[1].fill(-1)
+        #z[3].fill(1)
+        #z[4].fill(2)
+
+        z[0].fill(-1)
+        z[2].fill(1)
+
+        plt.subplots_adjust(left=0.125, bottom=0.1, right=0.9, top=0.9,
+                            wspace=0.0, hspace=0.0)
+        num_plt_rows = len(z)
+        for idx in range(len(z)):
+            color = "g"
+            self.interpolate_continuous_code(z[idx],
+                                             num_interpolations=num_interpolations,
+                                             num_cols=0,
+                                             num_rows=num_plt_rows,
+                                             current_row=idx,
+                                             dim_to_interpolate=dim_to_interpolate,
+                                             start_interpolation=start_interpolation,
+                                             end_interpolation=end_interpolation,
+                                             show_title=show_title,
+                                             color=color,
+                                             with_nearest_neighbor=with_nearest_neighbor)
 
     def generate_and_interpolate_between(self, n_epochs=5000, sig_class1=0, sig_class2=1,
                                          num_interpolations=4, with_nearest_neighbor=True):
@@ -338,7 +445,23 @@ class Generator:
                                                    num_interpolations=num_interpolations,
                                                    sig_class1=sig_class1, sig_class2=sig_class2,
                                                    with_nearest_neighbor=with_nearest_neighbor)
-        plt.show()
+
+    def generate_matches_from_real(self, n_epochs=5000, num_sample_each_class=10):
+        plt.figure(figsize=(32, 20))
+        np.random.seed(2)  # 2
+        x_inputs, _ = self.dataset.fetch_samples(num_sample_each_class=num_sample_each_class)
+        x_inputs = x_inputs.cuda()
+        # l = 45
+        # u = 120
+        # mask[:, l:u] = 0.0
+
+        fakes, z = self._generate_representation(x_inputs, batch_size=x_inputs.shape[0],
+                                                 n_epochs=n_epochs, fixed_noise=True)
+
+        fakes = fakes.cpu().detach().numpy()
+        x_inputs = x_inputs.cpu().detach().numpy()
+
+        return x_inputs, fakes, z
 
     def show_real(self, label=None):
         plt.figure(figsize=(32, 16))
@@ -380,17 +503,17 @@ class Generator:
         tmp = code.copy()
         # tmp[:, 1] = np.random.uniform(0., -1., size=[tmp.shape[0]])
         # tmp[:, 0] = np.random.uniform(1., 1., size=[tmp.shape[0]])  # tmp[:, 2] = np.random.uniform(0., .5, size=[tmp.shape[0]])
-        #mask = np.vstack((tmp[:, 0] < 0.,)).T
+        # mask = np.vstack((tmp[:, 0] < 0.,)).T
         mask = np.vstack((tmp[:, 0] < 0., tmp[:, 2] < 0.37)).T
         mask = np.all(mask, axis=1)
-        #tmp[mask, 2] *= -1 #np.random.uniform(.3, .8, size=[tmp[tmp[:, 0] < 0., 0].shape[0]])
-        tmp[mask, 0] *= -1. #np.random.uniform(.3, .8, size=[tmp[tmp[:, 0] < 0., 0].shape[0]])
+        # tmp[mask, 2] *= -1 #np.random.uniform(.3, .8, size=[tmp[tmp[:, 0] < 0., 0].shape[0]])
+        tmp[mask, 0] *= -1.  # np.random.uniform(.3, .8, size=[tmp[tmp[:, 0] < 0., 0].shape[0]])
 
         tmp = tmp.clip(min=-1, max=1)
         # tmp[:, 0] = np.random.uniform(-0., -.25, size=[tmp.shape[0]])  # epoch 500 - sick to healthy
         # tmp[:, 2] = np.random.uniform(-0.5, -1., size=[tmp.shape[0]])  # epoch 500 - sick to vein
         # code[:, 2] = 1
-        #code[labels == 1] = tmp[labels == 1]
+        # code[labels == 1] = tmp[labels == 1]
         code = tmp
         code = torch.cuda.FloatTensor(code)
         fakes = self.G(code)
@@ -420,7 +543,8 @@ class Generator:
 
     def interpolate_continuous_code(self, z, dim_to_interpolate, num_interpolations=5,
                                     num_cols=2, num_rows=3, current_row=0,
-                                    start_interpolation=-2., end_interpolation=2.):
+                                    start_interpolation=-2., end_interpolation=2., show_title=True, color=None,
+                                    with_nearest_neighbor=True, title_type="code"):
 
         # plt.figure(figsize=(32, 16))
         if len(z.shape) == 1:
@@ -428,6 +552,9 @@ class Generator:
         c = np.linspace(start_interpolation, end_interpolation, num_interpolations).reshape(1, -1)
         z = z.repeat(num_interpolations, 0)  # .reshape(-1, self.size_total)
 
+        print(c)
+        print("- " * 10)
+        print("- " * 10)
         print(z[0])
         print("- " * 10)
         z[:, -(self.dim_code_conti - dim_to_interpolate)] = c
@@ -440,15 +567,23 @@ class Generator:
         fakes = fakes.cpu().detach().numpy()
         for idx, signature in enumerate(fakes):
             legend = None
-            current_col = idx + 1 + 2
+            current_col = idx + 1 + num_cols
+            title = ""
+            if title_type == "code":
+                title = "c{}={}".format(dim_to_interpolate,
+                                                        str(c.squeeze()[idx])) if show_title else ""
+            elif title_type == "mean":
+                title = "mean: {:.2f}".format(np.mean(signature)) if show_title else ""
+
             self._plot_signatures(np.expand_dims(signature, axis=0),
                                   num_rows=num_rows,
                                   num_col=num_interpolations + num_cols,
                                   current_col=current_col,
                                   current_row=current_row, x_real=None, legend=legend, alpha=.8,
-                                  ylim=(0.0, 0.9),
-                                  title="c{}={}".format(dim_to_interpolate, str(c.squeeze()[idx])),
-                                  with_nearest_neighbor=True)
+                                  ylim=(0.0, 1.),
+                                  title=title,
+                                  with_nearest_neighbor=with_nearest_neighbor,
+                                  color=color)
 
     def interpolate_between_to_representation(self, z1, z2, num_interpolations=5,
                                               sig_class1=0, sig_class2=1, with_nearest_neighbor=True):
@@ -479,7 +614,7 @@ class Generator:
         # generate samples of interpolation - could also be done in one step but who cares
         z_ = z1.copy()
 
-        #plt.suptitle("Difference of representation along continuous " +
+        # plt.suptitle("Difference of representation along continuous " +
         #             "code of classes {}/{}: {} \n Max diff dim: {}".format(sig_class1, sig_class2,
         #                                                                   str(z_diff),
         #                                                                   str(c_dim_max_diff)))
@@ -505,7 +640,7 @@ class Generator:
         :return: nearest neigbor
         """
         if self.kdt is None:
-            self.kdt = KDTree(self.complete_data, leaf_size=30, metric='manhattan') # euclidean
+            self.kdt = KDTree(self.complete_data, leaf_size=30, metric='manhattan')  # euclidean
 
         result = []
         if query_samples is not None:
@@ -552,23 +687,38 @@ if __name__ == '__main__':
         # generator = Generator(g, config)
         # generate z and corresponding signatures, then interpolate intervall of specific continuous code dim
         # dim_to_interpolate =: 0 for first conti_dim, 1 for second conti dim etc...
-        generator.generate_and_interpolate(n_epochs=300, dim_to_interpolate=0, num_interpolations=9,
-                                           start_interpolation=-1.5, end_interpolation=1.5, fixed_noise=True)
+        dim_to_interpolate = 2
+        generator.generate_and_interpolate(n_epochs=300, dim_to_interpolate=dim_to_interpolate, num_interpolations=6,
+                                           start_interpolation=-1.5, end_interpolation=1.5, fixed_noise=True,
+                                           show_title=False, only_interpolation=False, with_nearest_neighbor=True,
+                                           show_real=True)
+        plt.show()
+        save_path = "/home/patrick/Dropbox/ml@tuda-private/Hyperspec/Paper_Gafiken/mat_dataset/interpolation_small_dataset_c{}_withNN.pdf".format(
+            dim_to_interpolate)
+        #plt.savefig(save_path, bbox_inches="tight", format="pdf")
+
     elif int(opt.func_to_call) == 1:
-        generator = Generator(g, config)
+        generator = Generator(g, config, eval=True)
+        sig_class1 = 2
+        sig_class2 = 1
         # generate z and corresponding signatures, then interpolate between their representations
         generator.generate_and_interpolate_between(n_epochs=1000,
-                                                   sig_class1=2, sig_class2=1,
-                                                   num_interpolations=5,
-                                                   with_nearest_neighbor=False)
+                                                   sig_class1=sig_class1, sig_class2=sig_class2,
+                                                   num_interpolations=6,
+                                                   with_nearest_neighbor=True)
+        plt.show()
+        save_path = "/home/patrick/Dropbox/ml@tuda-private/Hyperspec/Paper_Gafiken/mat_dataset/interpolation_small_dataset_class{}-class{}.pdf".format(
+            sig_class1, sig_class2)
+        # plt.savefig(save_path, bbox_inches="tight", format="pdf")
+
     elif int(opt.func_to_call) == 2:
-        generator = Generator(g, config)
+        generator = Generator(g, config, eval=True)
         z = np.random.uniform(-1, 1, [size_total, 1])
         # np.array([[0.01107442, -0.848209, -0.7097479, -0.7720386, -0.2420094, 0.40806794, -0.02045506,
         # 0.87952113, -0.6333749, 0.09759343, -0.50705755, -0.8597003, -0.05239939]])
         generator.generate(z)
     elif int(opt.func_to_call) == 3:
-        generator = Generator(g, config)
+        generator = Generator(g, config, eval=True)
         generator.show_real(label=0)
     elif int(opt.func_to_call) == 4:
         generator = Generator(g, config, eval=True)
@@ -589,3 +739,52 @@ if __name__ == '__main__':
                 "rb"))
         # generate code for test_dataset
         generator.generate_from_representation(data_dict)
+    elif int(opt.func_to_call) == 6:
+        generator = Generator(g, config, eval=True)
+
+        # generate matches from datasample
+        real, fakes, code = generator.generate_matches_from_real(num_sample_each_class=3)
+        for idx, real_sample in enumerate(real):
+            ax = plt.subplot(1, 1, 1)
+            ax.tick_params(labelsize=30)
+            plt.plot(real_sample[:-3], linewidth=5)
+            plt.savefig("/home/patrick/repositories/hyperspectral_phenotyping_gan/survey/real/{}.png".format(idx),
+                        format="png", bbox_inches="tight")
+            plt.clf()
+        for idx, fake_sample in enumerate(fakes):
+            ax = plt.subplot(1, 1, 1)
+            ax.tick_params(labelsize=30)
+            ax = plt.plot(fake_sample[:-3], linewidth=5)
+            plt.savefig("/home/patrick/repositories/hyperspectral_phenotyping_gan/survey/fake/{}.png".format(idx),
+                        format="png", bbox_inches="tight")
+            plt.clf()
+            # plt.axis("off")
+            # generator.plot_signatures(real=real, fakes=fakes)
+            # plt.show()
+    elif int(opt.func_to_call) == 7:
+        generator = Generator(g, config, eval=True)
+        # generator = Generator(g, config)
+        # generate z and corresponding signatures, then interpolate intervall of specific continuous code dim
+        # dim_to_interpolate =: 0 for first conti_dim, 1 for second conti dim etc...
+        dim_to_interpolate = 6
+        generator.interpolate(dim_to_interpolate=dim_to_interpolate, num_interpolations=4,
+                              start_interpolation=-1, end_interpolation=1,
+                              show_title=False, with_nearest_neighbor=False)
+        plt.show()
+        save_path = "/home/patrick/Dropbox/ml@tuda-private/Hyperspec/Paper_Gafiken/mat_dataset/interpolation_small_dataset_c{}_-101.pdf".format(
+            dim_to_interpolate)
+        #plt.savefig(save_path, bbox_inches="tight", format="pdf")
+    if int(opt.func_to_call) == 8:
+        generator = Generator(g, config, eval=True)
+        # generator = Generator(g, config)
+        # generate z and corresponding signatures, then interpolate intervall of specific continuous code dim
+        # dim_to_interpolate =: 0 for first conti_dim, 1 for second conti dim etc...
+        dim_to_interpolate = 2
+        generator.generate_and_interpolate_meta(n_epochs=300, dim_to_interpolate=dim_to_interpolate, num_interpolations=6,
+                                           start_interpolation=-1, end_interpolation=1, fixed_noise=True,
+                                           show_title=True, only_interpolation=False, with_nearest_neighbor=True,
+                                           show_real=True)
+        plt.show()
+        save_path = "/home/patrick/Dropbox/ml@tuda-private/Hyperspec/Paper_Gafiken/mat_dataset/interpolation_small_dataset_c{}_withNN.pdf".format(
+            dim_to_interpolate)
+        #plt.savefig(save_path, bbox_inches="tight", format="pdf")

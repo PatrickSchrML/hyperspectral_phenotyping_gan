@@ -33,7 +33,7 @@ def normalize(data, max_value=None):
 
 
 class Mat_dataset(Dataset):
-    def __init__(self, train=True, eval=False, sup_ratio=1., train_ratio=0.25, balanced=True):
+    def __init__(self, train=True, eval=False, sup_ratio=1., train_ratio=0.25, balanced=True, meta_type=None):
         if train_ratio == 1:
             n_splits = 1
         else:
@@ -64,6 +64,13 @@ class Mat_dataset(Dataset):
         else:
             self.y_sup_mask = np.array([True for _ in range(len(self.labels))])
 
+        self.data = torch.Tensor(self.data)
+        self.complete_x = torch.Tensor(self.complete_x)
+        self.complete_y = torch.Tensor(self.complete_y)
+        self.labels = torch.Tensor(self.labels)
+
+        if meta_type is not None:
+            self.min_, self.max_, self.meta_func = self._compute_meta_knowledge_code(meta_type)
         # self.load_leaf()
         # compute which labels should be user for semi-supervised learning - by a mask
         """if sup_ratio < 1:
@@ -82,6 +89,27 @@ class Mat_dataset(Dataset):
 
     def get_complete_data(self):
         return self.complete_x, self.complete_y, self.complete_y
+
+    def _compute_meta_knowledge_code(self, meta_type="mean"):
+        if meta_type == "mean":
+            meta_func = (torch.mean, dict({"dim": 1}))
+        elif meta_type == "first":
+            meta_func = (torch.index_select, dict({"dim": -1, "index": torch.tensor([0]).cuda()}))
+        else:
+            raise ValueError("meta function not supported")
+        meta = meta_func[0](self.complete_x.cuda(), **meta_func[1])
+        min_ = torch.min(meta).cuda()
+        max_ = torch.max(meta).cuda()
+        #print(min_)
+        #print(max_)
+
+        return min_, max_, meta_func
+
+    def compute_knwoledge_code_from_data(self, x):
+        code = self.meta_func[0](x, **self.meta_func[1])
+        code = 2 * ((code - self.min_) / (self.max_ - self.min_)) - 1
+        #print(code[:10])
+        return code.squeeze()
 
     def show_as_img(self):
         assert self.indices is not None
@@ -148,7 +176,7 @@ class Mat_dataset(Dataset):
     def fetch_row_col(self, row=[39, 57, 87], col=[100, 112, 123]):
         assert self.indices is not None
         # data, targets, _ = zip(*self.data_original)
-        data, targets = self.data.copy(), self.labels.copy()
+        data, targets = self.data.data.cpu().numpy(), self.labels.data.cpu().numpy()
         targets = targets.squeeze()
 
         dim = self.meta["dim"]
